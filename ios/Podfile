@@ -1,0 +1,162 @@
+# Resolve react_native_pods.rb with node to allow for hoisting
+require Pod::Executable.execute_command('node', ['-p',
+  'require.resolve(
+    "react-native/scripts/react_native_pods.rb",
+    {paths: [process.argv[1]]},
+  )', __dir__]).strip
+
+# Architecture switch.
+#
+# This project targets the **old architecture** (Paper renderer + the classic
+# bridge, no TurboModules/Fabric), so the flag defaults to "0" here instead of
+# React Native 0.77's own default of "1".
+#
+# Both architectures are supported — pick one at `pod install` time:
+#
+#   npm run pods         # old architecture (default)
+#   npm run pods:newarch # new architecture (Fabric + TurboModules)
+#
+# An explicit RCT_NEW_ARCH_ENABLED in the environment always wins.
+ENV['RCT_NEW_ARCH_ENABLED'] ||= '0'
+new_architecture_enabled = ENV['RCT_NEW_ARCH_ENABLED'] == '1'
+Pod::UI.puts "React Native architecture: #{new_architecture_enabled ? 'new (Fabric + TurboModules)' : 'old (Paper + bridge)'}".green
+
+platform :ios, min_ios_version_supported
+prepare_react_native_project!
+
+linkage = ENV['USE_FRAMEWORKS']
+if linkage != nil
+  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
+  use_frameworks! :linkage => linkage.to_sym
+end
+
+# fmt 11.0.2 — the version pinned by React Native 0.77 — does not compile with
+# the Clang shipped in Xcode 16.3+/26: its `consteval` format-string
+# constructor is rejected with "call to consteval function ... is not a
+# constant expression" (fixed upstream in fmt 11.1).
+#
+# fmt decides whether to use `consteval` in base.h and *unconditionally*
+# `#define`s FMT_USE_CONSTEVAL, so a -D flag on the command line is overridden
+# by the header. This lets the build system win, and the flag set in
+# post_install then turns consteval off — moving format-string validation from
+# compile time to run time, which is all RN/Folly need from fmt here.
+def patch_fmt_consteval!(installer)
+  header = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+  return unless File.exist?(header)
+
+  marker = '#if defined(FMT_USE_CONSTEVAL) // provided by the build system'
+  contents = File.read(header)
+  return if contents.include?(marker)
+
+  patched = contents.sub(
+    "#if !defined(__cpp_lib_is_constant_evaluated)\n",
+    "#{marker}\n#elif !defined(__cpp_lib_is_constant_evaluated)\n"
+  )
+  return if patched == contents
+
+  # CocoaPods checks pod sources out read-only.
+  original_mode = File.stat(header).mode
+  File.chmod(0o644, header)
+  File.write(header, patched)
+  File.chmod(original_mode, header)
+  Pod::UI.puts 'Patched fmt/base.h to honour -DFMT_USE_CONSTEVAL (Xcode 16.3+ fix)'.yellow
+end
+
+# JazzCore.xcframework statically embeds an entire *second* copy of React
+# Native — its own JSC-based JSI, Yoga, glog, folly, double-conversion — and
+# re-exports ~1200 of those symbols from a dynamic framework.
+#
+# CocoaPods writes the linked frameworks in alphabetical order, so
+# `-framework "JazzCore"` lands *before* `-framework "hermes"`. React Native
+# gets its `facebook::jsi::*` implementation from hermes.framework, so the
+# linker binds those references to JazzCore instead — and at run time the app
+# calls Jazz's JSC-flavoured JSI against a Hermes runtime. That segfaults on
+# the JS thread while the app is still starting up.
+#
+# Moving the Jazz frameworks to the end of OTHER_LDFLAGS makes hermes (and
+# every React Native pod) win the symbol resolution, while Jazz still links
+# fine — nothing in the app resolves Jazz symbols anywhere else.
+def link_jazz_frameworks_last!(installer)
+  jazz_framework = /-framework\s+"(Jazz[A-Za-z]*)"/
+
+  installer.aggregate_targets.each do |aggregate|
+    aggregate.xcconfigs.each do |config_name, _|
+      path = aggregate.xcconfig_path(config_name)
+      next unless File.exist?(path)
+
+      contents = File.read(path)
+      updated = contents.gsub(/^OTHER_LDFLAGS = .*$/) do |line|
+        moved = line.scan(jazz_framework).flatten
+        next line if moved.empty?
+
+        stripped = line.gsub(jazz_framework, '').squeeze(' ').rstrip
+        "#{stripped} " + moved.map { |name| %(-framework "#{name}") }.join(' ')
+      end
+
+      next if updated == contents
+
+      File.write(path, updated)
+      Pod::UI.puts "Moved Jazz frameworks to the end of OTHER_LDFLAGS in #{File.basename(path)}".yellow
+    end
+  end
+end
+
+target 'SberJazz' do
+  config = use_native_modules!
+
+  # Sber Jazz iOS SDK (video conferencing)
+  # https://github.com/salute-developers/jazz-ios-sdk
+  pod 'JazzSDK', :git => 'https://github.com/salute-developers/jazz-ios-sdk.git', :branch => 'main'
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    :new_arch_enabled => new_architecture_enabled,
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    # https://github.com/facebook/react-native/blob/main/packages/react-native/scripts/react_native_pods.rb#L197-L202
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      # :ccache_enabled => true
+    )
+
+    installer.pods_project.targets.each do |t|
+      t.build_configurations.each do |bc|
+        # JazzSDK ships pre-built xcframeworks that require iOS 15.0+.
+        # Keep every pod at (at least) the app's deployment target.
+        current = bc.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+        if current.nil? || current.to_f < 15.1
+          bc.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'
+        end
+
+        # See `patch_fmt_consteval!` above.
+        defs = bc.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] || ['$(inherited)']
+        defs = [defs] if defs.is_a?(String)
+        unless defs.include?('FMT_USE_CONSTEVAL=0')
+          bc.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs + ['FMT_USE_CONSTEVAL=0']
+        end
+      end
+    end
+
+    # The app target compiles Folly headers (which pull in fmt) too.
+    installer.aggregate_targets.each do |aggregate|
+      aggregate.user_project.native_targets.each do |t|
+        t.build_configurations.each do |bc|
+          defs = bc.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] || ['$(inherited)']
+          defs = [defs] if defs.is_a?(String)
+          unless defs.include?('FMT_USE_CONSTEVAL=0')
+            bc.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs + ['FMT_USE_CONSTEVAL=0']
+          end
+        end
+      end
+      aggregate.user_project.save
+    end
+
+    patch_fmt_consteval!(installer)
+    link_jazz_frameworks_last!(installer)
+  end
+end
