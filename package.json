@@ -8,8 +8,8 @@
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest",
-    "pods": "cd ios && RCT_NEW_ARCH_ENABLED=0 LANG=en_US.UTF-8 pod install",
-    "pods:newarch": "cd ios && RCT_NEW_ARCH_ENABLED=1 LANG=en_US.UTF-8 pod install",
+    "pods": "cd ios && RCT_NEW_ARCH_ENABLED=0 LC_ALL=C.UTF-8 pod install",
+    "pods:newarch": "cd ios && RCT_NEW_ARCH_ENABLED=1 LC_ALL=C.UTF-8 pod install",
     "compile": "tsc --noEmit"
   },
   "dependencies": {

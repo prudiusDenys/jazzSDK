@@ -28,11 +28,16 @@
 * macOS + Xcode 14.3.1 и выше (проект собирался на Xcode 26.5)
 * iOS 15.1+ (deployment target проекта; сам SDK требует iOS 15.0+)
 * Node 18+, CocoaPods 1.13+
-* Ruby-локаль в UTF-8 — иначе CocoaPods падает с
-  `Unicode Normalization not appropriate for ASCII-8BIT`:
+* Локаль процесса в UTF-8 — иначе CocoaPods падает с
+  `Unicode Normalization not appropriate for ASCII-8BIT`. Это про кодировку,
+  а не про язык: системный Ruby 2.6 из macOS без UTF-8-локали стартует в
+  US-ASCII и спотыкается на `unicode_normalize` для путей. npm-скрипты
+  `pods` / `pods:newarch` уже проставляют `LC_ALL=C.UTF-8` сами.
+
+  Вручную это нужно, только если запускаете `pod install` напрямую:
 
   ```bash
-  export LANG=en_US.UTF-8
+  export LC_ALL=C.UTF-8
   ```
 
 ## Запуск

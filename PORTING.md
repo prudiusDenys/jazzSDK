@@ -48,10 +48,10 @@
 | В проекте есть хотя бы один Swift-файл | JazzSDK — Swift-only, мост тоже на Swift |
 | iOS deployment target ≥ 15.1 | JazzSDK требует iOS 15.0+ |
 | CocoaPods 1.13+ | |
-| Локаль в UTF-8 | иначе CocoaPods падает с `Unicode Normalization not appropriate for ASCII-8BIT` |
+| Локаль процесса в UTF-8 | иначе CocoaPods падает с `Unicode Normalization not appropriate for ASCII-8BIT`. Это про кодировку, а не про язык |
 
 ```bash
-export LANG=en_US.UTF-8
+export LC_ALL=C.UTF-8
 ```
 
 Архитектура RN значения не имеет: интеграция работает и на старой
@@ -202,7 +202,7 @@ link_jazz_frameworks_last!(installer)
 ### 4.4. Установка
 
 ```bash
-cd ios && LANG=en_US.UTF-8 pod install
+npm run pods
 ```
 
 Первый запуск скачивает ~900 МБ xcframework'ов — это долго. Дальше всё берётся
@@ -361,7 +361,7 @@ Android SDK от Sber.
 | SIGSEGV на старте, в стеке `jsi::Object::getPropertyAsObject` и JazzCore | фреймворки Jazz линкуются раньше `hermes` | шаг 4.2; проверьте `grep -c "(from JazzCore)"` из шага 6 |
 | `TurboModuleRegistry.getEnforcing('ImageLoader'): could not be found` | RN получил класс-дубликат из JazzCore | шаг 5; убедитесь, что `JazzShadowedClasses.swift` в Compile Sources |
 | `Нативный модуль 'JazzSdk' недоступен` | файлы не в таргете, или не сделан `pod install`, или не пересобрана нативная часть | шаг 1; пересоберите, перезапуск Metro не поможет |
-| `Unicode Normalization not appropriate for ASCII-8BIT` при `pod install` | локаль не UTF-8 | `export LANG=en_US.UTF-8` |
+| `Unicode Normalization not appropriate for ASCII-8BIT` при `pod install` | локаль не UTF-8 | `export LC_ALL=C.UTF-8` |
 | `E_JAZZ_INIT_FAILED` / «Неверный секретный ключ SDK» | нет валидного ключа | это ожидаемо, см. шаг 6 |
 | `objc: Class RCT… is implemented in both …` в консоли | те самые дубликаты RN внутри JazzCore | **не ошибка**, убрать может только Sber, собрав JazzCore без встроенного RN |
 | `Connection refused` на порт 8097 | React DevTools не запущен | **не ошибка**, штатное поведение dev-сборки RN |
