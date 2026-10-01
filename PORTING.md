@@ -21,7 +21,7 @@
 | Слой | Файлы | Переносится |
 | --- | --- | --- |
 | Нативный мост в SDK | `ios/SberJazz/Jazz/JazzSdkModule.{swift,m}` | копированием как есть |
-| JS-обёртка | `src/jazz/JazzSdk.ts` | копированием как есть |
+| JS-обёртка | `src/jazz/JazzSdk.ts`, `src/jazz/jazzAuth.ts`, `src/jazz/useJazzMeeting.ts` | копированием как есть |
 | Обходы багов окружения | `ios/Podfile`, `ios/SberJazz/Jazz/JazzShadowedClasses.swift`, 4 строки в `AppDelegate` | вставками в существующие файлы |
 
 Почему нужен третий слой — коротко:
@@ -72,7 +72,7 @@ cp -R ios/SberJazz/Jazz <ваш-проект>/ios/<ВашТаргет>/Jazz
 
 | Файл | Что делает |
 | --- | --- |
-| `JazzSdkModule.swift` | сам мост: `Jazz.initialize`, create / start / join / terminate, разбор ссылок, события фазы конференции |
+| `JazzSdkModule.swift` | сам мост: `Jazz.initialize` (авторизация `.jazzToken`), провайдер токена, create / start / join / terminate, разбор ссылок, события фазы конференции |
 | `JazzSdkModule.m` | регистрация модуля в RN (`RCT_EXTERN_MODULE`) |
 | `JazzShadowedClasses.swift` | обход дубликатов классов из JazzCore (шаг 5) |
 
@@ -91,15 +91,50 @@ cp -R ios/SberJazz/Jazz <ваш-проект>/ios/<ВашТаргет>/Jazz
 ## Шаг 2. Скопировать JS-обёртку
 
 ```bash
-cp src/jazz/JazzSdk.ts <ваш-проект>/src/jazz/JazzSdk.ts
+mkdir -p <ваш-проект>/src/jazz
 ```
 
-Это единственный файл, который нужен приложению. Он ни от чего не зависит,
-кроме `react-native`, и кладётся в любое удобное место.
+```bash
+cp src/jazz/JazzSdk.ts src/jazz/jazzAuth.ts src/jazz/useJazzMeeting.ts <ваш-проект>/src/jazz/
+```
 
-`src/arch.ts` и `App.tsx` копировать не нужно — первый показывает активную
-архитектуру (диагностика), второй демонстрирует API. `App.tsx` удобно держать
-рядом как справочник по вызовам.
+* `JazzSdk.ts` — обёртка над нативным модулем;
+* `jazzAuth.ts` — обмен транспортного токена на токен доступа
+  (`POST https://api.salutejazz.ru/v1/auth/login`);
+* `useJazzMeeting.ts` — хук для кнопки: initialize при первом нажатии +
+  вход во встречу по ссылке.
+
+Все три зависят только от `react` / `react-native` и кладутся рядом в любое
+удобное место (импорты между ними относительные).
+
+Кнопка в вашем приложении:
+
+```tsx
+import {useJazzMeeting} from './src/jazz/useJazzMeeting';
+
+function MeetingButton() {
+  const {joinMeeting, busy} = useJazzMeeting({
+    getTransportToken: () => api.getJazzTransportToken(),
+  });
+  return (
+    <Button
+      title="Online Встреча"
+      onPress={() => joinMeeting(meetingUrl)} // https://salutejazz.ru/<код>?psw=...
+      disabled={busy}
+    />
+  );
+}
+```
+
+Остальные опции хука (`hostUrl`, `onError`) — в README, раздел
+«Экран приложения».
+
+`api.getJazzTransportToken()` — ваш запрос к своему бэкенду; бэкенд
+подписывает транспортный JWT ключом SDK (схема — в README, раздел
+«Авторизация по токену»). Ключ SDK в приложение не кладите.
+
+`src/arch.ts` и `App.tsx` копировать не нужно: первый — диагностика активной
+архитектуры, второй — демо-экран с одной кнопкой на этом хуке.
 
 ## Шаг 3. Разрешения в Info.plist
 
@@ -300,18 +335,28 @@ import {NativeModules} from 'react-native';
 console.log(NativeModules.JazzSdk != null); // true
 ```
 
-**Сквозной вызов.** Вызовите `initialize` с заведомо неверным ключом:
+**Сквозной вызов.** Инициализируйте SDK с заведомо неверным транспортным
+токеном и начните встречу:
 
 ```ts
-import Jazz from './src/jazz/JazzSdk';
+import {useJazzMeeting} from './src/jazz/useJazzMeeting';
 
-await Jazz.initialize({sdkSecret: 'wrong', userId: '123'});
+const {joinMeeting} = useJazzMeeting({
+  getTransportToken: async () => {
+    console.log('Jazz запросил токен');
+    return 'wrong';
+  },
+});
+
+joinMeeting('https://salutejazz.ru/<код>?psw=<пароль>');
 ```
 
-Ожидаемый результат — reject с `E_JAZZ_INIT_FAILED` и текстом про неверный
-ключ. Это **успех**: ошибка пришла из самого JazzSDK, значит весь путь
-JS → мост → SDK работает. Дальше нужен настоящий ключ из
-[кабинета разработчика Sber](https://developers.sber.ru/docs/ru/jazz/sdk/overview).
+Откроется экран входа Jazz с подставленными кодом и паролем. Введите имя и
+нажмите Join: в консоли появится `Jazz запросил токен`, а
+обмен токена в хуке упадёт с
+`POST /auth/login → 401: {"errorCode":"TOKEN_INVALID",...}`. Это **успех**:
+весь путь SDK → мост → JS → API Jazz работает. Дальше нужен настоящий
+транспортный токен от вашего бэкенда.
 
 ---
 
@@ -362,7 +407,9 @@ Android SDK от Sber.
 | `TurboModuleRegistry.getEnforcing('ImageLoader'): could not be found` | RN получил класс-дубликат из JazzCore | шаг 5; убедитесь, что `JazzShadowedClasses.swift` в Compile Sources |
 | `Нативный модуль 'JazzSdk' недоступен` | файлы не в таргете, или не сделан `pod install`, или не пересобрана нативная часть | шаг 1; пересоберите, перезапуск Metro не поможет |
 | `Unicode Normalization not appropriate for ASCII-8BIT` при `pod install` | локаль не UTF-8 | `export LC_ALL=C.UTF-8` |
-| `E_JAZZ_INIT_FAILED` / «Неверный секретный ключ SDK» | нет валидного ключа | это ожидаемо, см. шаг 6 |
+| `POST /auth/login → 401 TOKEN_INVALID` | транспортный токен неверный, просрочен или подписан не тем ключом | проверьте claims и подпись на бэкенде; с тестовым токеном — это ожидаемо, см. шаг 6 |
+| Jazz закрывает экран встречи сразу после Join | `getToken` бросил ошибку или не ответил за 30 с | смотрите ошибку в консоли JS и строку `Jazz: не удалось получить токен` в логе Xcode |
+| `ServerTrust evaluation for jazz.sber.ru failed` | старый хост | `hostUrl` по умолчанию теперь `https://salutejazz.ru` — не передавайте `jazz.sber.ru` |
 | `objc: Class RCT… is implemented in both …` в консоли | те самые дубликаты RN внутри JazzCore | **не ошибка**, убрать может только Sber, собрав JazzCore без встроенного RN |
 | `Connection refused` на порт 8097 | React DevTools не запущен | **не ошибка**, штатное поведение dev-сборки RN |
 
@@ -371,7 +418,7 @@ Android SDK от Sber.
 ## Чек-лист
 
 - [ ] Папка `Jazz/` скопирована и **все три файла добавлены в таргет**
-- [ ] `JazzSdk.ts` скопирован
+- [ ] `JazzSdk.ts`, `jazzAuth.ts` и `useJazzMeeting.ts` скопированы
 - [ ] Ключи разрешений в `Info.plist`
 - [ ] `pod 'JazzSDK'` в Podfile
 - [ ] `patch_fmt_consteval!` и `link_jazz_frameworks_last!` скопированы и **вызываются** в `post_install`
@@ -380,4 +427,5 @@ Android SDK от Sber.
 - [ ] `pod install` напечатал обе строки про patch и Moved
 - [ ] `grep -c "(from JazzCore)"` возвращает `0`
 - [ ] `NativeModules.JazzSdk != null`
-- [ ] `initialize` с неверным ключом возвращает ошибку из SDK
+- [ ] С неверным транспортным токеном Join в Jazz приводит к `401 TOKEN_INVALID` от `/auth/login`
+- [ ] Бэкенд выдаёт транспортный токен, ключ SDK в приложении не хранится

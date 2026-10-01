@@ -19,7 +19,9 @@ const LINKING_ERROR =
   '- Jazz SDK подключён только для iOS.';
 
 type NativeJazzSdk = {
-  initialize(options: JazzInitOptions): Promise<boolean>;
+  initialize(options: Omit<JazzInitOptions, 'getToken'>): Promise<boolean>;
+  resolveTokenRequest(requestId: string, token: string): void;
+  rejectTokenRequest(requestId: string, message: string): void;
   isInitialized(): Promise<boolean>;
   createConference(options: JazzConferenceOptions): Promise<string | null>;
   startConference(options: JazzStartOptions): Promise<boolean>;
@@ -51,18 +53,15 @@ export type JazzRoom = {
 };
 
 export type JazzInitOptions = {
-  /** Секретный ключ SDK, выданный при регистрации приложения в Jazz. */
-  sdkSecret: string;
-  /** Хост Jazz. По умолчанию https://jazz.sber.ru */
+  /**
+   * Возвращает токен доступа Jazz — ответ `POST /v1/auth/login`
+   * (см. `exchangeTransportToken` / `createJazzTokenProvider` в jazzAuth.ts).
+   * SDK вызывает её сам, когда ему нужен токен, в том числе повторно,
+   * когда старый истёк, — поэтому это функция, а не строка.
+   */
+  getToken: () => Promise<string>;
+  /** Хост Jazz. По умолчанию https://salutejazz.ru */
   hostUrl?: string;
-  /** Идентификатор пользователя на вашей стороне. Обязателен. */
-  userId: string;
-  userName?: string;
-  userEmail?: string;
-  /** Издатель токена, обычно имя приложения. */
-  issuer?: string;
-  /** Время жизни токена в секундах (по умолчанию 120). */
-  timeToLive?: number;
   /** bundleId Broadcast Upload Extension для демонстрации экрана. */
   screenShareExtensionIdentifier?: string;
 };
@@ -118,8 +117,44 @@ export type JazzConferencePhaseEvent =
  * Инициализация SDK. Должна выполняться до любого другого вызова —
  * иначе `JazzSession.shared` выдаёт ошибку авторизации.
  */
-export function initialize(options: JazzInitOptions): Promise<boolean> {
-  return requireNative().initialize(options);
+export function initialize({
+  getToken,
+  ...options
+}: JazzInitOptions): Promise<boolean> {
+  const native = requireNative();
+  listenForTokenRequests(native, getToken);
+  return native.initialize(options);
+}
+
+let tokenSubscription: EmitterSubscription | undefined;
+
+/**
+ * Нативный провайдер шлёт `JazzTokenRequested { requestId }`, когда Jazz
+ * нужен токен; отвечаем через resolveTokenRequest / rejectTokenRequest.
+ * Подписка одна на приложение: повторный initialize меняет только getToken.
+ */
+function listenForTokenRequests(
+  native: NativeJazzSdk,
+  getToken: () => Promise<string>,
+) {
+  tokenSubscription?.remove();
+  tokenSubscription = emitter(native).addListener(
+    'JazzTokenRequested',
+    async ({requestId}: {requestId: string}) => {
+      try {
+        native.resolveTokenRequest(requestId, await getToken());
+      } catch (e) {
+        native.rejectTokenRequest(
+          requestId,
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    },
+  );
+}
+
+function emitter(native: NativeJazzSdk): NativeEventEmitter {
+  return new NativeEventEmitter(native as unknown as NativeModule);
 }
 
 export function isInitialized(): Promise<boolean> {
@@ -170,8 +205,10 @@ export function addConferencePhaseListener(
   if (!NativeJazz) {
     return undefined;
   }
-  const emitter = new NativeEventEmitter(NativeJazz as unknown as NativeModule);
-  return emitter.addListener('JazzConferencePhaseChanged', listener);
+  return emitter(NativeJazz).addListener(
+    'JazzConferencePhaseChanged',
+    listener,
+  );
 }
 
 export default {

@@ -9,15 +9,17 @@
 
 Собирается под **обе архитектуры React Native**. По умолчанию — **старая**
 (Paper + классический мост, без TurboModules и Fabric); новая включается одной
-командой, менять код не нужно. Активная архитектура выводится прямо на экране.
+командой, менять код не нужно.
 
 ## Что внутри
 
 | Слой | Файл | Назначение |
 | --- | --- | --- |
 | JS API | `src/jazz/JazzSdk.ts` | Типизированная обёртка над нативным модулем |
-| UI | `App.tsx` | Демо-экран: инициализация, создание / старт / вход в конференцию |
-| Нативный модуль | `ios/SberJazz/Jazz/JazzSdkModule.swift` | Мост в `Jazz` / `JazzSession.shared` |
+| Авторизация | `src/jazz/jazzAuth.ts` | Обмен транспортного токена на токен доступа (`POST /v1/auth/login`) |
+| Хук | `src/jazz/useJazzMeeting.ts` | `joinMeeting(url)`: initialize при первом вызове + вход во встречу по ссылке |
+| UI | `App.tsx` | Одна кнопка «Online Встреча» — открывает экран встречи Jazz |
+| Нативный модуль | `ios/SberJazz/Jazz/JazzSdkModule.swift` | Мост в `Jazz` / `JazzSession.shared` + провайдер токена |
 | Регистрация модуля | `ios/SberJazz/Jazz/JazzSdkModule.m` | `RCT_EXTERN_MODULE(JazzSdk, RCTEventEmitter)` |
 | Обход конфликта | `ios/SberJazz/Jazz/JazzShadowedClasses.swift` | Поиск классов RN в обход дубликатов из JazzCore |
 | Зависимость | `ios/Podfile` | `pod 'JazzSDK', :git => 'https://github.com/salute-developers/jazz-ios-sdk.git', :branch => 'main'` |
@@ -89,34 +91,114 @@ JS-код и нативный модуль не меняются.
 * **Нигде нет `#if RCT_NEW_ARCH_ENABLED`** — один и тот же исходник собирается
   в обоих режимах.
 * `src/arch.ts` определяет активную архитектуру в рантайме (по
-  `global.RN$Bridgeless`, `__turboModuleProxy`, `nativeFabricUIManager`) и
-  показывает её на экране — удобно, чтобы убедиться, что собралось то, что
-  ожидалось.
+  `global.RN$Bridgeless`, `__turboModuleProxy`, `nativeFabricUIManager`);
+  `console.log(architectureLabel)` покажет, что собралось то, что ожидалось.
 
 Обе конфигурации проверены на симуляторе: приложение стартует и
-`Jazz.initialize` доходит до SDK (см. скриншоты в `docs/`).
+`Jazz.initialize` доходит до SDK (см. скриншоты в `docs/`; они сделаны ещё
+со старой инициализацией по ключу).
 
-## Ключ SDK
+## Экран приложения
 
-Jazz авторизует приложение по секретному ключу, который выдаётся при
-регистрации приложения в [кабинете разработчика Sber](https://developers.sber.ru/docs/ru/jazz/sdk/overview).
-Ключ вводится прямо на демо-экране и передаётся в
-`Jazz.initialize(conferenceAuthorizationType: .secretKey(...))`.
+На экране одна кнопка **«Online Встреча»**. Комната создаётся вне
+приложения — в приложение приходит только ссылка вида
+`https://salutejazz.ru/<код>?psw=<пароль>`. По нажатию приложение
+инициализирует SDK (только в первый раз), разбирает ссылку через
+`Jazz.handleUrl` и вызывает `Jazz.joinConference` с кодом и паролем встречи.
+Дальше весь UI — экран входа (имя, микрофон, камера, кнопка Join), сама
+встреча, выход — рисует Jazz.
 
-Без валидного ключа инициализация вернёт ошибку
-`E_JAZZ_INIT_FAILED` (`JazzSDKError.invalidSDKSecret`) — это ожидаемое
-поведение, а не поломка интеграции.
+В демо ссылка задана константой `MEETING_URL` в `App.tsx` — подставьте свою
+(например, из вашего API).
+
+Вся логика — в хуке `useJazzMeeting`, компоненту остаётся кнопка:
+
+```tsx
+import {useJazzMeeting} from './src/jazz/useJazzMeeting';
+
+const {joinMeeting, busy} = useJazzMeeting({
+  getTransportToken: () => api.getJazzTransportToken(),
+});
+
+<Button
+  title="Online Встреча"
+  onPress={() => joinMeeting(meetingUrl)}
+  disabled={busy}
+/>;
+```
+
+| Опция | По умолчанию | |
+| --- | --- | --- |
+| `getTransportToken` | — (обязательна) | транспортный JWT от вашего бэкенда; обмен на токен доступа хук делает сам |
+| `hostUrl` | `https://salutejazz.ru` | хост Jazz |
+| `onError(error, stage)` | `Alert` с текстом ошибки | `stage`: `'join'` — не удалось разобрать ссылку / открыть встречу, `'token'` — не получен токен |
+
+Возвращает `joinMeeting(url)`, `busy` (идёт подключение — повторные нажатия
+игнорируются) и `isSupported` (`false` на Android / без нативного модуля).
+Ссылки на вебинар тоже подходят; ссылки на трансляцию или карточку встречи —
+нет, `joinMeeting` сообщит об этом через `onError`.
+
+Перед запуском реализуйте `getJazzTransportToken()` в `App.tsx` — запрос к
+вашему бэкенду за транспортным токеном. Пока там заглушка: экран Jazz
+откроется, а после Join приложение покажет «Не удалось получить токен Jazz».
+
+## Авторизация по токену
+
+SDK инициализируется с `conferenceAuthorizationType: .jazzToken(...)`: ключ
+SDK в приложение не попадает, Jazz получает готовый **токен доступа**.
+Это рекомендованная схема из
+[документации SaluteJazz](https://developers.sber.ru/docs/ru/jazz/sdk/authorization-patterns).
+
+```
+ ваш бэкенд                  приложение (JS)                     Jazz SDK (iOS)
+ ──────────                  ───────────────                     ──────────────
+                                                    ◀── нужен токен (provideToken)
+                             ◀── событие JazzTokenRequested {requestId}
+ транспортный JWT ─────────▶ getTransportToken()
+                             POST https://api.salutejazz.ru/v1/auth/login
+                               Authorization: Bearer <транспортный JWT>
+                             ◀── { "token": "<токен доступа>" }
+                             resolveTokenRequest(requestId, token) ──▶ .success(token)
+```
+
+1. **Транспортный токен** выпускает ваш бэкенд: JWT, подписанный ключом SDK
+   (ES256/ES384 по `kty`/`crv` ключа), с claims `iat`, `exp`, `jti` (uuid4),
+   `sub` (uuid4 пользователя), `sdkProjectId` (uuid4 проекта из Studio) и
+   опционально `userName`, `userEmail`, `iss`. Подробности —
+   [API: авторизация](https://developers.sber.ru/docs/ru/jazz/api/authorization).
+2. **Обмен на токен доступа** делает приложение — `exchangeTransportToken()`
+   из `src/jazz/jazzAuth.ts`. Тело запроса пустое, транспортный токен идёт в
+   заголовке `Authorization: Bearer`, ответ — `{ "token": "..." }`.
+3. **Передача в SDK.** Токен — это не параметр `initialize`, а функция
+   `getToken`: Jazz сам вызывает провайдер, когда токен нужен (например, при
+   старте встречи), и может вызвать его снова, когда старый истёк.
+   Нативный `RNJazzTokenProvider` пересылает запрос в JS событием
+   `JazzTokenRequested`, обёртка в `JazzSdk.ts` вызывает `getToken` и
+   возвращает результат через `resolveTokenRequest` / `rejectTokenRequest`.
+   Если JS не ответил за 30 секунд или бросил ошибку, SDK получает
+   `ConferenceTokenError.invalidToken`.
+
+`Jazz.initialize` сам сеть не трогает и с любым `getToken` резолвится `true`;
+неверный токен проявится позже — когда SDK его запросит. Проверено на
+симуляторе: **вход во встречу по ссылке без токена невозможен** — после Join
+SDK запрашивает токен и без него не подключается (то же для старта новой
+встречи). Создание ссылки (`createConference`) токен не запрашивает, но в
+этом приложении комнаты не создаются.
+
+Хост Jazz по умолчанию — `https://salutejazz.ru` (`jazz.sber.ru` теперь
+редиректит туда, а сертификат старого домена SDK отвергает).
 
 ## JS API
 
 ```ts
 import Jazz from './src/jazz/JazzSdk';
+import {createJazzTokenProvider} from './src/jazz/jazzAuth';
 
 await Jazz.initialize({
-  sdkSecret: '<ваш ключ>',
-  hostUrl: 'https://jazz.sber.ru',
-  userId: '123456',
-  userName: 'React Native User',
+  // getTransportToken — ваш запрос к своему бэкенду за транспортным JWT;
+  // createJazzTokenProvider меняет его на токен доступа через /v1/auth/login
+  getToken: createJazzTokenProvider(() => api.getJazzTransportToken()),
+  hostUrl: 'https://salutejazz.ru', // необязательно, это значение по умолчанию
 });
 
 // создать встречу и получить ссылку
@@ -129,7 +211,7 @@ await Jazz.startConference({title: 'Планёрка', isMicrophoneOn: true});
 await Jazz.joinConference({roomId: '123-456-789', roomPassword: 'secret'});
 
 // разобрать ссылку-приглашение
-const target = await Jazz.handleUrl('https://jazz.sber.ru/abc?psw=...', 'applink');
+const target = await Jazz.handleUrl('https://salutejazz.ru/abc?psw=...', 'applink');
 
 await Jazz.terminateActiveConference();
 
@@ -228,11 +310,16 @@ npm run lint && npx tsc --noEmit && npm test
 ```
 
 Проверено на iPhone 17 Pro (iOS 26.5), Xcode 26.5 — **в обеих архитектурах**:
-приложение запускается, `NativeModules.JazzSdk` доступен, а `Jazz.initialize`
-с невалидным ключом корректно возвращает ошибку `JazzSDKError.invalidSDKSecret`
-из самого SDK.
+приложение запускается, `NativeModules.JazzSdk` доступен, вызовы доходят до SDK.
 
 | | Сборка | Запуск | `NativeModules.JazzSdk` | Вызов `Jazz.initialize` |
 | --- | --- | --- | --- | --- |
 | Старая (Paper + bridge) | ✅ | ✅ | ✅ | ✅ |
 | Новая (Fabric + TurboModules) | ✅ | ✅ | ✅ | ✅ |
+
+Авторизация по токену проверена на старой архитектуре с заведомо неверным
+транспортным токеном: `initialize` → `ok`, «Начать конференцию» → SDK
+запрашивает токен → JS шлёт `POST https://api.salutejazz.ru/v1/auth/login` →
+сервер отвечает `401 {"errorCode":"TOKEN_INVALID"}` → SDK получает
+`invalidToken` и закрывает экран встречи. С настоящим транспортным токеном
+от вашего бэкенда на этом шаге вернётся токен доступа.

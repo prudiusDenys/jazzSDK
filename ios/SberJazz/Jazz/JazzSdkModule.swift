@@ -25,19 +25,59 @@ import UIKit
 
 // MARK: - Token provider
 
-/// Jazz asks this object for a token configuration whenever it needs to
-/// authorize the user. In a production app the values would come from your
-/// backend / session store — here they are handed over from JS at
-/// `initialize()` time.
-final class RNJazzTokenConfigurationProvider: JazzTokenConfigurationProvider {
-  private let configuration: JazzTokenConfiguration
+/// Supplies Jazz with an access token (`.jazzToken` authorization).
+///
+/// The token itself is obtained on the JS side: Jazz asks for it, the module
+/// emits `JazzTokenRequested { requestId }`, JS gets a transport token from
+/// your backend, exchanges it via `POST https://api.salutejazz.ru/v1/auth/login`
+/// and hands the result back through `resolveTokenRequest` /
+/// `rejectTokenRequest` (see src/jazz/JazzSdk.ts and src/jazz/jazzAuth.ts).
+///
+/// Jazz may call this more than once (e.g. when the token expires), so every
+/// call is a fresh round-trip to JS rather than a cached value.
+final class RNJazzTokenProvider: JazzConferenceTokenProvider, @unchecked Sendable {
+  /// How long JS has to answer before Jazz gets `.invalidToken`.
+  private static let timeout: TimeInterval = 30
 
-  init(configuration: JazzTokenConfiguration) {
-    self.configuration = configuration
+  private let lock = NSLock()
+  private var pending: [String: AuthTokenCompletion] = [:]
+
+  func provideToken(completion: @escaping AuthTokenCompletion) {
+    let requestId = UUID().uuidString
+    lock.lock()
+    pending[requestId] = completion
+    lock.unlock()
+
+    DispatchQueue.main.async {
+      // The module instance changes on every JS reload, while Jazz keeps this
+      // provider for the lifetime of the process — always look it up.
+      guard let module = JazzSdkModule.current, module.requestToken(requestId: requestId) else {
+        self.complete(requestId, with: .failure(.invalidToken))
+        return
+      }
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.timeout) {
+      self.complete(requestId, with: .failure(.invalidToken))
+    }
   }
 
-  func provideTokenConfiguration() -> JazzTokenConfiguration {
-    configuration
+  func token() async -> Result<String, ConferenceTokenError> {
+    await withCheckedContinuation { continuation in
+      provideToken { continuation.resume(returning: $0) }
+    }
+  }
+
+  /// Settles a pending request. Later calls with the same id are ignored.
+  @discardableResult
+  func complete(_ requestId: String, with result: Result<String, ConferenceTokenError>) -> Bool {
+    lock.lock()
+    let completion = pending.removeValue(forKey: requestId)
+    lock.unlock()
+
+    guard let completion else { return false }
+    completion(result)
+    return true
   }
 }
 
@@ -55,6 +95,14 @@ final class JazzSdkModule: RCTEventEmitter {
   }
 
   private static let phaseEvent = "JazzConferencePhaseChanged"
+  private static let tokenRequestedEvent = "JazzTokenRequested"
+
+  /// Jazz keeps the provider passed to the first `Jazz.initialize` for the
+  /// whole process, so it must outlive any single module instance.
+  private static let tokenProvider = RNJazzTokenProvider()
+
+  /// The live module instance (replaced on every JS reload).
+  static weak var current: JazzSdkModule?
 
   /// The SDK exposes no public "is initialized" flag, so track it here.
   private var initialized = false
@@ -68,7 +116,12 @@ final class JazzSdkModule: RCTEventEmitter {
   /// Everything below touches UIKit, so pin the module to the main queue.
   override var methodQueue: DispatchQueue { .main }
 
-  override func supportedEvents() -> [String] { [Self.phaseEvent] }
+  override init() {
+    super.init()
+    Self.current = self
+  }
+
+  override func supportedEvents() -> [String] { [Self.phaseEvent, Self.tokenRequestedEvent] }
 
   override func startObserving() {
     hasJsListeners = true
@@ -95,17 +148,7 @@ final class JazzSdkModule: RCTEventEmitter {
       return
     }
 
-    let userId = (options["userId"] as? String) ?? ""
-    guard !userId.isEmpty else {
-      reject(
-        ErrorCode.badArguments.rawValue,
-        "`userId` обязателен для конфигурации токена Jazz.",
-        nil
-      )
-      return
-    }
-
-    let hostString = (options["hostUrl"] as? String) ?? "https://jazz.sber.ru"
+    let hostString = (options["hostUrl"] as? String) ?? "https://salutejazz.ru"
     guard let hostUrl = URL(string: hostString), hostUrl.scheme != nil else {
       reject(
         ErrorCode.badArguments.rawValue,
@@ -114,16 +157,6 @@ final class JazzSdkModule: RCTEventEmitter {
       )
       return
     }
-
-    let tokenProvider = RNJazzTokenConfigurationProvider(
-      configuration: JazzTokenConfiguration(
-        timeToLive: (options["timeToLive"] as? NSNumber)?.intValue ?? 120,
-        issuer: (options["issuer"] as? String) ?? "SberJazzRNDemo",
-        userId: userId,
-        userName: options["userName"] as? String,
-        userEmail: options["userEmail"] as? String
-      )
-    )
 
     let settings = JazzSettings(
       network: JazzNetwork(hostUrl: hostUrl),
@@ -135,10 +168,7 @@ final class JazzSdkModule: RCTEventEmitter {
 
     do {
       try Jazz.initialize(
-        conferenceAuthorizationType: .secretKey(
-          secretKey: (options["sdkSecret"] as? String) ?? "",
-          tokenConfigurationProvider: tokenProvider
-        ),
+        conferenceAuthorizationType: .jazzToken(tokenProvider: Self.tokenProvider),
         container: container,
         navigationType: .default,
         settings: settings
@@ -170,6 +200,31 @@ final class JazzSdkModule: RCTEventEmitter {
     rejecter _: @escaping RCTPromiseRejectBlock
   ) {
     resolve(initialized)
+  }
+
+  // MARK: token
+
+  /// Asks JS for a token. Returns false when nobody on the JS side listens,
+  /// so the provider can fail fast instead of waiting for the timeout.
+  fileprivate func requestToken(requestId: String) -> Bool {
+    guard hasJsListeners else { return false }
+    sendEvent(withName: Self.tokenRequestedEvent, body: ["requestId": requestId])
+    return true
+  }
+
+  /// JS answer to `JazzTokenRequested`: the access token from `/auth/login`.
+  @objc(resolveTokenRequest:token:)
+  func resolveTokenRequest(_ requestId: String, token: String) {
+    let result: Result<String, ConferenceTokenError> =
+      token.isEmpty ? .failure(.invalidToken) : .success(token)
+    Self.tokenProvider.complete(requestId, with: result)
+  }
+
+  /// JS answer to `JazzTokenRequested` when the token could not be obtained.
+  @objc(rejectTokenRequest:message:)
+  func rejectTokenRequest(_ requestId: String, message: String) {
+    NSLog("Jazz: не удалось получить токен — \(message)")
+    Self.tokenProvider.complete(requestId, with: .failure(.invalidToken))
   }
 
   // MARK: conferences
@@ -322,8 +377,6 @@ final class JazzSdkModule: RCTEventEmitter {
 
   private static func describe(initializationError error: Error) -> String {
     switch error {
-    case JazzSDKError.invalidSDKSecret:
-      return "Неверный секретный ключ SDK. Зарегистрируйте приложение в Jazz и укажите выданный ключ."
     case JazzSDKError.invalidNetworkConfiguration:
       return "Неверная сетевая конфигурация Jazz (проверьте hostUrl)."
     case JazzSDKError.alreadyInitialized:

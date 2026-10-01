@@ -27,6 +27,14 @@ RCT_EXTERN_METHOD(initialize
                   : (RCTPromiseResolveBlock)resolve rejecter
                   : (RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(resolveTokenRequest
+                  : (NSString *)requestId token
+                  : (NSString *)token)
+
+RCT_EXTERN_METHOD(rejectTokenRequest
+                  : (NSString *)requestId message
+                  : (NSString *)message)
+
 RCT_EXTERN_METHOD(isInitialized
                   : (RCTPromiseResolveBlock)resolve rejecter
                   : (RCTPromiseRejectBlock)reject)
