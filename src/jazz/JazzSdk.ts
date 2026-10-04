@@ -7,16 +7,18 @@ import {
 } from 'react-native';
 
 /**
- * Typed wrapper around the native `JazzSdk` module
- * (ios/SberJazz/Jazz/JazzSdkModule.swift), which drives the Sber Jazz iOS SDK:
- * https://github.com/salute-developers/jazz-ios-sdk
+ * Typed wrapper around the native `JazzSdk` module, which drives the Sber Jazz SDK:
+ *   iOS     — ios/SberJazz/Jazz/JazzSdkModule.swift
+ *             (https://github.com/salute-developers/jazz-ios-sdk)
+ *   Android — android/app/src/main/java/com/sberjazz/jazz/JazzSdkModule.kt
+ *             (https://github.com/salute-developers/jazz-android-sdk)
  */
 
 const LINKING_ERROR =
   "Нативный модуль 'JazzSdk' недоступен.\n\n" +
-  '- Выполнен ли `pod install` в папке ios/ ?\n' +
-  '- Пересобрано ли приложение после добавления нативного модуля?\n' +
-  '- Jazz SDK подключён только для iOS.';
+  '- iOS: выполнен ли `pod install` в папке ios/ ?\n' +
+  '- Android: добавлен ли JazzSdkPackage() в MainApplication.getPackages()?\n' +
+  '- Пересобрано ли приложение после добавления нативного модуля?';
 
 type NativeJazzSdk = {
   initialize(options: Omit<JazzInitOptions, 'getToken'>): Promise<boolean>;
@@ -33,7 +35,8 @@ type NativeJazzSdk = {
 const NativeJazz: NativeJazzSdk | undefined = NativeModules.JazzSdk;
 
 /** True when the native Jazz module is linked into the running binary. */
-export const isJazzSupported = Platform.OS === 'ios' && NativeJazz != null;
+export const isJazzSupported =
+  (Platform.OS === 'ios' || Platform.OS === 'android') && NativeJazz != null;
 
 function requireNative(): NativeJazzSdk {
   if (!NativeJazz) {
@@ -62,7 +65,7 @@ export type JazzInitOptions = {
   getToken: () => Promise<string>;
   /** Хост Jazz. По умолчанию https://salutejazz.ru */
   hostUrl?: string;
-  /** bundleId Broadcast Upload Extension для демонстрации экрана. */
+  /** iOS: bundleId Broadcast Upload Extension для демонстрации экрана. */
   screenShareExtensionIdentifier?: string;
 };
 
@@ -81,6 +84,8 @@ export type JazzMediaSettings = {
   /** 'receiver' — тихий динамик, 'speaker' — громкая связь. */
   preferredSpeaker?: 'receiver' | 'speaker';
   analyticsConferenceType?: string;
+  /** Android: имя участника во встрече (iOS берёт его из своего экрана входа). */
+  userName?: string;
 };
 
 export type JazzStartOptions = JazzConferenceOptions &
@@ -90,7 +95,16 @@ export type JazzStartOptions = JazzConferenceOptions &
   };
 
 export type JazzJoinOptions = JazzMediaSettings & {
-  /** Код встречи. Если не передан, Jazz покажет свой экран ввода кода. */
+  /**
+   * Android: ссылка-приглашение целиком (https://salutejazz.ru/abc?psw=...).
+   * Разбирать её не нужно — Jazz сделает это сам. На iOS не используется:
+   * там ссылку разбирает `handleUrl`, а сюда передаются roomId / roomPassword.
+   */
+  meetingUrl?: string;
+  /**
+   * Код встречи. Если не передан, на iOS Jazz покажет свой экран ввода кода;
+   * на Android нужен либо он, либо `meetingUrl`.
+   */
   roomId?: string;
   roomPassword?: string;
   roomHost?: string;
@@ -106,7 +120,8 @@ export type JazzLinkTarget =
 
 export type JazzConferencePhaseEvent =
   | {phase: 'inactive' | 'connecting' | 'conferenceLobby' | 'webinarLobby'}
-  | {phase: 'activeConference' | 'activeWebinar'; room: JazzRoom}
+  /** `room` присылает только iOS. */
+  | {phase: 'activeConference' | 'activeWebinar'; room?: JazzRoom}
   | {phase: 'waitingStream'}
   | {phase: 'activeStream'; streamId: string}
   | {phase: 'unknown'};
@@ -117,13 +132,28 @@ export type JazzConferencePhaseEvent =
  * Инициализация SDK. Должна выполняться до любого другого вызова —
  * иначе `JazzSession.shared` выдаёт ошибку авторизации.
  */
-export function initialize({
+export async function initialize({
   getToken,
   ...options
 }: JazzInitOptions): Promise<boolean> {
   const native = requireNative();
   listenForTokenRequests(native, getToken);
-  return native.initialize(options);
+  const ok = await native.initialize(options);
+  initializedHostUrl = options.hostUrl ?? DEFAULT_HOST_URL;
+  return ok;
+}
+
+export const DEFAULT_HOST_URL = 'https://salutejazz.ru';
+
+/** Хост последнего успешного initialize в этом JS-контексте. */
+let initializedHostUrl: string | undefined;
+
+/**
+ * С каким хостом SDK инициализирован из текущего JS-контекста
+ * (`undefined` — ещё не инициализирован, в том числе после перезагрузки JS).
+ */
+export function currentHostUrl(): string | undefined {
+  return initializedHostUrl;
 }
 
 let tokenSubscription: EmitterSubscription | undefined;
@@ -161,7 +191,10 @@ export function isInitialized(): Promise<boolean> {
   return requireNative().isInitialized();
 }
 
-/** Открывает экран создания конференции, резолвится ссылкой на встречу. */
+/**
+ * Создаёт конференцию, резолвится ссылкой на встречу. iOS показывает свой
+ * экран создания, Android создаёт встречу без UI.
+ */
 export function createConference(
   options: JazzConferenceOptions = {},
 ): Promise<string | null> {
@@ -175,7 +208,10 @@ export function startConference(
   return requireNative().startConference(options);
 }
 
-/** Присоединяется к конференции (по коду встречи или через экран Jazz). */
+/**
+ * Присоединяется к конференции (по коду встречи или через экран Jazz).
+ * Android: `false` — пользователь сам закрыл экран входа Jazz (не ошибка).
+ */
 export function joinConference(
   options: JazzJoinOptions = {},
 ): Promise<boolean> {
@@ -187,7 +223,10 @@ export function terminateActiveConference(): Promise<boolean> {
   return requireNative().terminateActiveConference();
 }
 
-/** Разбирает app-link / deep-link Jazz и сообщает, куда он ведёт. */
+/**
+ * Разбирает app-link / deep-link Jazz и сообщает, куда он ведёт.
+ * Только iOS: на Android передайте ссылку в `joinConference({meetingUrl})`.
+ */
 export function handleUrl(
   url: string,
   type: JazzLinkType = 'applink',
@@ -215,6 +254,7 @@ export default {
   isJazzSupported,
   initialize,
   isInitialized,
+  currentHostUrl,
   createConference,
   startConference,
   joinConference,

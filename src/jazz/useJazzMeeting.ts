@@ -1,7 +1,11 @@
 import {useCallback, useRef, useState} from 'react';
-import {Alert} from 'react-native';
+import {Alert, Platform} from 'react-native';
 
-import Jazz, {isJazzSupported, type JazzRoom} from './JazzSdk';
+import Jazz, {
+  DEFAULT_HOST_URL,
+  isJazzSupported,
+  type JazzRoom,
+} from './JazzSdk';
 import {exchangeTransportToken} from './jazzAuth';
 
 export type JazzMeetingErrorStage =
@@ -31,7 +35,7 @@ export type UseJazzMeetingResult = {
   joinMeeting: (meetingUrl: string) => Promise<void>;
   /** true, пока идёт инициализация / открытие встречи. */
   busy: boolean;
-  /** false на Android и когда нативный модуль не слинкован. */
+  /** false, когда нативный модуль не слинкован (или платформа не iOS/Android). */
   isSupported: boolean;
 };
 
@@ -48,7 +52,7 @@ function toError(e: unknown): Error {
   return e instanceof Error ? e : new Error(String(e));
 }
 
-/** Достаёт из ссылки-приглашения комнату, к которой можно присоединиться. */
+/** iOS: достаёт из ссылки-приглашения комнату, к которой можно присоединиться. */
 async function roomFromLink(meetingUrl: string): Promise<JazzRoom> {
   const target = await Jazz.handleUrl(meetingUrl.trim(), 'applink');
   if (
@@ -82,6 +86,9 @@ export function useJazzMeeting(
 
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  // Android SDK запрашивает токен по нескольку раз за один вход — сообщаем
+  // об ошибке токена один раз на нажатие, а не Alert на каждый запрос.
+  const tokenErrorReportedRef = useRef(false);
 
   const reportError = useCallback(
     (e: unknown, stage: JazzMeetingErrorStage) => {
@@ -96,7 +103,10 @@ export function useJazzMeeting(
       const transportToken = await optionsRef.current.getTransportToken();
       return await exchangeTransportToken(transportToken);
     } catch (e) {
-      reportError(e, 'token');
+      if (!tokenErrorReportedRef.current) {
+        tokenErrorReportedRef.current = true;
+        reportError(e, 'token');
+      }
       throw e;
     }
   }, [reportError]);
@@ -108,20 +118,30 @@ export function useJazzMeeting(
         return;
       }
       busyRef.current = true;
+      tokenErrorReportedRef.current = false;
       setBusy(true);
       try {
-        if (!(await Jazz.isInitialized())) {
-          await Jazz.initialize({
-            getToken,
-            hostUrl: optionsRef.current.hostUrl,
+        // Инициализируем, если SDK ещё не готов, если этот JS-контекст его
+        // не инициализировал (после перезагрузки JS нужно заново подписаться
+        // на запросы токена) или если сменился hostUrl.
+        const hostUrl = optionsRef.current.hostUrl ?? DEFAULT_HOST_URL;
+        if (
+          !(await Jazz.isInitialized()) ||
+          Jazz.currentHostUrl() !== hostUrl
+        ) {
+          await Jazz.initialize({getToken, hostUrl});
+        }
+        if (Platform.OS === 'android') {
+          // Android SDK принимает ссылку целиком и разбирает её сам.
+          await Jazz.joinConference({meetingUrl: meetingUrl.trim()});
+        } else {
+          const room = await roomFromLink(meetingUrl);
+          await Jazz.joinConference({
+            roomId: room.id,
+            roomPassword: room.password,
+            roomHost: room.host ?? undefined,
           });
         }
-        const room = await roomFromLink(meetingUrl);
-        await Jazz.joinConference({
-          roomId: room.id,
-          roomPassword: room.password,
-          roomHost: room.host ?? undefined,
-        });
       } catch (e) {
         reportError(e, 'join');
       } finally {

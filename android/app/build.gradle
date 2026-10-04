@@ -111,6 +111,15 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
+    // Jazz SDK: https://github.com/salute-developers/jazz-android-sdk
+    implementation("com.sdkit.jazz:jazz-public-sdk:$jazzSdkVersion") {
+        // Свой Hermes Jazz (для встроенного RN 0.61) дублирует hermes-android
+        // из React Native 0.77: без exclude — "Duplicate class
+        // com.facebook.hermes.BuildConfig" на checkDebugDuplicateClasses.
+        exclude(group: "com.sdkit.jazz", module: "hermes")
+    }
+    implementation(platform("com.sdkit.jazz:jazz-public-bom:$jazzSdkVersion"))
+
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
     } else {

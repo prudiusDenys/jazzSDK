@@ -1,7 +1,8 @@
 # Перенос интеграции Jazz SDK в другой проект
 
-Инструкция «что скопировать и куда вставить», чтобы поднять Jazz iOS SDK
-в другом React Native приложении.
+Инструкция «что скопировать и куда вставить», чтобы поднять Jazz SDK
+в другом React Native приложении. Шаги 1–6 — iOS, Android — в
+[отдельном разделе](#android) (он короче: обходов почти не нужно).
 
 Порядок ниже выстроен так, чтобы после каждого шага можно было собраться и
 убедиться, что ничего не сломалось. Не переставляйте шаги местами: шаг 4
@@ -23,6 +24,7 @@
 | Нативный мост в SDK | `ios/SberJazz/Jazz/JazzSdkModule.{swift,m}` | копированием как есть |
 | JS-обёртка | `src/jazz/JazzSdk.ts`, `src/jazz/jazzAuth.ts`, `src/jazz/useJazzMeeting.ts` | копированием как есть |
 | Обходы багов окружения | `ios/Podfile`, `ios/SberJazz/Jazz/JazzShadowedClasses.swift`, 4 строки в `AppDelegate` | вставками в существующие файлы |
+| Android | `android/app/src/main/java/com/sberjazz/jazz/*.kt`, Gradle, 2 строки в `MainApplication` | см. [раздел Android](#android) |
 
 Почему нужен третий слой — коротко:
 
@@ -392,13 +394,186 @@ await Jazz.initialize({..., screenShareExtensionIdentifier: 'com.example.App.Bro
 соответствующие функции в `JazzSdk.ts`. Обязателен только `initialize` —
 без него `JazzSession.shared` возвращает ошибку авторизации.
 
-**Android.** Jazz iOS SDK — только для iOS. `Jazz.isJazzSupported` вернёт
-`false`, вызовы бросят понятную ошибку линковки. Для Android нужен отдельный
-Android SDK от Sber.
+**Android.** См. раздел [«Android»](#android) ниже — там свой, гораздо более
+короткий порядок.
+---
+
+## Android
+
+Android SDK (`com.sdkit.jazz:jazz-public-sdk`) ставится из Maven-репозитория
+Jazz. JS-часть общая с iOS: если шаг 2 уже сделан, на Android ничего
+копировать в `src/` не нужно — `useJazzMeeting` сам выберет путь для платформы.
+
+**Время:** ~15 минут, плюс первая сборка Gradle (скачивает ~120 AAR, ~50 МБ;
+APK со всеми ABI — ~240 МБ).
+
+### A1. Требования
+
+| Требование | Почему |
+| --- | --- |
+| `minSdkVersion` ≥ 26 | Jazz SDK требует Android 8.0+ |
+| `compileSdkVersion` ≥ 34 | так собран SDK |
+| Kotlin в app-модуле | мост написан на Kotlin (в шаблоне RN 0.71+ он уже есть) |
+| JDK 17+ (на Apple Silicon — arm64) | как и для самого RN 0.77; x86_64-JDK под Rosetta собирает в разы медленнее |
+
+### A2. Репозиторий и зависимость
+
+`android/build.gradle` — в `buildscript.ext` версия SDK и minSdk:
+
+```groovy
+minSdkVersion = 26
+jazzSdkVersion = "25.07.1.3"
+```
+
+и после `apply plugin: "com.facebook.react.rootproject"`:
+
+```groovy
+allprojects {
+    repositories {
+        exclusiveContent {
+            forRepository {
+                maven {
+                    name = "JazzMaven"
+                    url = "https://public.repo.dp.s2b.tech/repo/public/repository/jazz-maven/"
+                }
+            }
+            filter {
+                includeGroup("com.sdkit.jazz")
+                includeGroup("ru.sberdevices.core")
+                includeGroup("ru.sberbank.mobile.qr")
+                includeGroup("ru.sberbank.sdakit.sbercast")
+                includeVersion("com.otaliastudios", "zoomlayout", "1.8.0")
+                includeVersion("com.otaliastudios.opengl", "egloo", "0.4.0")
+            }
+        }
+    }
+}
+```
+
+Сам репозиторий обязателен: артефактов Jazz нет в Maven Central. Фильтр
+`exclusiveContent` — защита источников, он работает в обе стороны:
+
+* артефакты Jazz берутся **только** из репозитория Jazz — чужой пакет с тем
+  же именем в Maven Central, google или jitpack их не подменит;
+* из репозитория Jazz берутся **только** они — там лежат и чужие артефакты
+  (например, свой React Native `0.61.5-jitsi` в группе `com.facebook.react`),
+  и они не должны подменять ваши зависимости.
+
+Группы перечислены **точно, без масок**: например, `ru.sberdevices.smartapp`
+живёт в Maven Central, и маска `ru.sberdevices.*` его бы заблокировала.
+`zoomlayout 1.8.0` и `egloo 0.4.0` нужны Jazz, но этих версий нет в Maven
+Central (были только в закрытом jcenter) — поэтому закреплены именно версии,
+а другие версии этих библиотек по-прежнему придут из Maven Central.
+
+> Если в `gradle.properties` задан корпоративный прокси
+> `exclusiveEnterpriseRepository`, плагин RN оставит только его, а этот блок
+> всё равно пойдёт на внешний `public.repo.dp.s2b.tech`. Во внутренней сети,
+> где внешние адреса закрыты, замените URL на зеркало репозитория Jazz в
+> вашем Nexus.
+
+> Если в `settings.gradle` стоит `dependencyResolutionManagement` с
+> `RepositoriesMode.FAIL_ON_PROJECT_REPOS`, добавьте этот `maven { … }` туда,
+> а не в `allprojects`.
+
+`android/app/build.gradle`, в `dependencies`:
+
+```groovy
+implementation("com.sdkit.jazz:jazz-public-sdk:$jazzSdkVersion") {
+    exclude(group: "com.sdkit.jazz", module: "hermes")
+}
+implementation(platform("com.sdkit.jazz:jazz-public-bom:$jazzSdkVersion"))
+```
+
+`exclude … hermes` — **обязательная** часть: Jazz тащит свой старый Hermes
+(для встроенного в него RN 0.61), который дублирует `hermes-android` из
+React Native. Без `exclude` сборка падает на `checkDebugDuplicateClasses`.
+
+### A3. Скопировать нативный мост
+
+```bash
+cp -R android/app/src/main/java/com/sberjazz/jazz <ваш-проект>/android/app/src/main/java/<ваш/пакет>/jazz
+```
+
+| Файл | Что делает |
+| --- | --- |
+| `JazzSdkModule.kt` | сам мост: initialize, create / start / join / terminate, события фазы и запроса токена |
+| `JazzInstaller.kt` | установка SDK (`JazzConfig.Custom`) + провайдер токена, который спрашивает JS |
+| `JazzSdkPackage.kt` | регистрация модуля в RN |
+
+Замените первую строку каждого файла (`package com.sberjazz.jazz`) на свой
+пакет, например `package com.myapp.jazz`. Больше правок не нужно.
+
+### A4. MainApplication — две строки
+
+```kotlin
+import <ваш.пакет>.jazz.JazzSdkModule
+import <ваш.пакет>.jazz.JazzSdkPackage
+
+// в getPackages():
+PackageList(this).packages.apply {
+  add(JazzSdkPackage())
+}
+
+// в onCreate(), после SoLoader.init(...):
+JazzSdkModule.install(this)
+```
+
+SDK устанавливается при старте процесса, а не из JS, — так требует Jazz:
+система может восстановить экран встречи раньше, чем загрузится JS.
+
+**Если вы переопределяли WorkManager** (`Configuration.Provider`) — добавьте
+фабрику Jazz в свою `DelegatingWorkerFactory`:
+`addFactory(JazzSdk.getIntegrationClientApi().jazzWorkerFactory)`.
+Иначе ничего делать не нужно.
+
+### A5. Разрешения
+
+Ничего добавлять в `AndroidManifest.xml` не нужно: камера, микрофон,
+foreground service и прочее приходят из манифестов SDK при мерже. Runtime-запрос
+разрешений Jazz делает сам на своём экране входа.
+
+### A6. Проверка
+
+```bash
+npx react-native run-android
+```
+
+Та же проверка, что в шаге 6 для iOS, — `joinMeeting(url)` с заведомо неверным
+транспортным токеном. Порядок на Android другой: токен запрашивается
+**сразу** по нажатию, ещё до экрана Jazz. В логах появятся
+`Jazz запросил токен` и `POST /auth/login → 401 TOKEN_INVALID`, затем
+откроется экран входа Jazz «Are you ready to join?».
+
+```bash
+adb logcat | grep -E "JazzSdk|ReactNativeJS"
+```
+
+`W/JazzSdk: Jazz: токен не получен — …` значит, что ответ JS дошёл до SDK.
+Приложение при этом **не падает** — это и проверяем.
+
+> Если в комнате разрешены гости, после Join Android SDK войдёт во встречу
+> и без токена — как гость (iOS в той же ситуации не подключается). Для
+> встреч «только для сотрудников» создавайте комнаты с выключенными гостями.
+
+### Android: что может пойти не так
+
+| Симптом | Причина | Что делать |
+| --- | --- | --- |
+| `Could not find com.sdkit.jazz:…` | нет репозитория Jazz | A2; при `FAIL_ON_PROJECT_REPOS` — репозиторий в `settings.gradle` |
+| `Manifest merger failed : uses-sdk:minSdkVersion 24 cannot be smaller than version 26` | minSdk проекта ниже 26 | A2: `minSdkVersion = 26` |
+| `Duplicate class com.facebook.hermes.BuildConfig found in modules hermes-25.07…` | подтянулся Hermes из Jazz | A2: `exclude(group: "com.sdkit.jazz", module: "hermes")` |
+| Gradle тянет `com.facebook.react:react-native:0.61.5-jitsi…` из репозитория Jazz | репозиторий подключён без `exclusiveContent` | A2 |
+| `Could not find com.otaliastudios:zoomlayout:1.8.0` / `egloo:0.4.0` | в фильтре нет `includeVersion` для них | A2 |
+| `Could not find <группа Jazz>:…` после обновления Jazz | новая версия SDK добавила группу | допишите её в `filter { includeGroup(…) }` (A2) |
+| `Could not find com.otaliastudios:zoomlayout:<не 1.8.0>` | вместо `includeVersion` стоит `includeModule` — все версии ищутся только у Jazz | A2: `includeVersion(…, "1.8.0")` |
+| `Нативный модуль 'JazzSdk' недоступен` | не добавлен `JazzSdkPackage()` или не пересобрано приложение | A4; перезапуск Metro не поможет |
+| `Jazz SDK не инициализирован` | `joinConference` до `initialize` | используйте `useJazzMeeting` — он инициализирует сам |
+| Первая сборка Gradle идёт десятки минут | JDK x86_64 под Rosetta на Mac с Apple Silicon | поставьте arm64-JDK 17+; `file $(/usr/libexec/java_home)/bin/java` → `arm64` |
+| Без токена Android входит во встречу | в комнате разрешены гости | создавайте комнаты с `isGuestsOn: false` |
 
 ---
 
-## Что может пойти не так
+## Что может пойти не так (iOS)
 
 | Симптом | Причина | Что делать |
 | --- | --- | --- |
@@ -417,6 +592,8 @@ Android SDK от Sber.
 
 ## Чек-лист
 
+iOS:
+
 - [ ] Папка `Jazz/` скопирована и **все три файла добавлены в таргет**
 - [ ] `JazzSdk.ts`, `jazzAuth.ts` и `useJazzMeeting.ts` скопированы
 - [ ] Ключи разрешений в `Info.plist`
@@ -429,3 +606,11 @@ Android SDK от Sber.
 - [ ] `NativeModules.JazzSdk != null`
 - [ ] С неверным транспортным токеном Join в Jazz приводит к `401 TOKEN_INVALID` от `/auth/login`
 - [ ] Бэкенд выдаёт транспортный токен, ключ SDK в приложении не хранится
+
+Android:
+
+- [ ] `minSdkVersion = 26`, репозиторий Jazz через `exclusiveContent` с точным списком групп
+- [ ] Зависимость `jazz-public-sdk` **с `exclude … hermes`** + `jazz-public-bom`
+- [ ] Папка `jazz/` скопирована, `package` в трёх файлах заменён на ваш
+- [ ] `add(JazzSdkPackage())` и `JazzSdkModule.install(this)` в `MainApplication`
+- [ ] С неверным транспортным токеном Join в Jazz приводит к `401 TOKEN_INVALID`

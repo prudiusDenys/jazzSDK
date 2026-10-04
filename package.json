@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "android": "react-native run-android",
+    "android:newarch": "react-native run-android --extra-params \"-PnewArchEnabled=true\"",
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",

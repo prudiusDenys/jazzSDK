@@ -1,11 +1,12 @@
 buildscript {
     ext {
         buildToolsVersion = "35.0.0"
-        minSdkVersion = 24
+        minSdkVersion = 26 // Jazz SDK требует Android 8.0+
         compileSdkVersion = 35
         targetSdkVersion = 34
         ndkVersion = "27.1.12297006"
         kotlinVersion = "2.0.21"
+        jazzSdkVersion = "25.07.1.3"
     }
     repositories {
         google()
@@ -19,3 +20,40 @@ buildscript {
 }
 
 apply plugin: "com.facebook.react.rootproject"
+
+allprojects {
+    repositories {
+        // Jazz SDK (https://github.com/salute-developers/jazz-android-sdk).
+        // exclusiveContent работает в обе стороны:
+        //  - перечисленные артефакты берутся ТОЛЬКО отсюда — google(),
+        //    mavenCentral() и jitpack для них не опрашиваются, и чужой пакет
+        //    с тем же именем, опубликованный там, не подменит Jazz;
+        //  - отсюда берутся ТОЛЬКО они — в репозитории Jazz лежат и чужие
+        //    артефакты (например, свой React Native 0.61.5-jitsi в группе
+        //    com.facebook.react), и они не должны подменять ваши зависимости.
+        // Группы перечислены точно, без масок: например, ru.sberdevices.smartapp
+        // живёт в Maven Central, и маска ru.sberdevices.* его бы заблокировала.
+        // Новая версия Jazz добавила группу → сборка упадёт с «Could not find
+        // <группа>:…» — допишите её сюда.
+        exclusiveContent {
+            forRepository {
+                maven {
+                    name = "JazzMaven"
+                    url = "https://public.repo.dp.s2b.tech/repo/public/repository/jazz-maven/"
+                }
+            }
+            filter {
+                includeGroup("com.sdkit.jazz")
+                includeGroup("ru.sberdevices.core")
+                includeGroup("ru.sberbank.mobile.qr")
+                includeGroup("ru.sberbank.sdakit.sbercast")
+                // Нужны Jazz, но этих версий нет в Maven Central (были только в
+                // закрытом jcenter). Закреплены именно версии: другие версии
+                // (zoomlayout 1.9.0, egloo 0.6.x) есть только в Maven Central, и
+                // библиотека, которой они понадобятся, должна получить их оттуда.
+                includeVersion("com.otaliastudios", "zoomlayout", "1.8.0")
+                includeVersion("com.otaliastudios.opengl", "egloo", "0.4.0")
+            }
+        }
+    }
+}
