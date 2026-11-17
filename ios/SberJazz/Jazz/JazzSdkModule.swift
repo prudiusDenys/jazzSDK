@@ -213,11 +213,12 @@ final class JazzSdkModule: RCTEventEmitter {
   }
 
   /// JS answer to `JazzTokenRequested`: the access token from `/auth/login`.
+  /// An empty token means "join as a guest" and is passed to Jazz as is —
+  /// the iOS SDK has no dedicated guest mode, and how it treats an empty
+  /// token has not been verified yet (on Android it joins as a guest).
   @objc(resolveTokenRequest:token:)
   func resolveTokenRequest(_ requestId: String, token: String) {
-    let result: Result<String, ConferenceTokenError> =
-      token.isEmpty ? .failure(.invalidToken) : .success(token)
-    Self.tokenProvider.complete(requestId, with: result)
+    Self.tokenProvider.complete(requestId, with: .success(token))
   }
 
   /// JS answer to `JazzTokenRequested` when the token could not be obtained.

@@ -66,9 +66,13 @@ internal object RNJazzTokenProvider : JazzTokenProvider {
             }
         }
         // Ошибку не бросаем: Jazz не ловит исключения провайдера, и оно роняет
-        // приложение. null — штатный «токена нет», JS уже показал ошибку.
+        // приложение. null — штатный «токена нет»: Jazz входит гостем, если
+        // комната пускает гостей. Пустой токен от JS — тот же гостевой вход.
         return try {
-            withTimeout(TIMEOUT_MS) { deferred.await() }
+            withTimeout(TIMEOUT_MS) { deferred.await() }.ifEmpty {
+                Log.i("JazzSdk", "Jazz: пустой токен — вход гостем")
+                null
+            }
         } catch (e: TimeoutCancellationException) {
             Log.w("JazzSdk", "Jazz: JS не ответил на запрос токена за ${TIMEOUT_MS / 1000} с")
             null

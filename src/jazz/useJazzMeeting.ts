@@ -18,6 +18,10 @@ export type UseJazzMeetingOptions = {
   /**
    * Транспортный JWT от вашего бэкенда (подписан ключом SDK). Хук сам
    * обменяет его на токен доступа через `POST /v1/auth/login`.
+   *
+   * Обязательна. Пустая строка — вход гостем, без авторизации
+   * (`/auth/login` не вызывается). Гостя пустит только комната с
+   * разрешёнными гостями (`isGuestsOn`).
    */
   getTransportToken: () => Promise<string>;
   /** Хост Jazz. По умолчанию https://salutejazz.ru */
@@ -101,6 +105,10 @@ export function useJazzMeeting(
   const getToken = useCallback(async () => {
     try {
       const transportToken = await optionsRef.current.getTransportToken();
+      // Пустой токен — вход гостем: менять нечего, отдаём SDK пустую строку.
+      if (!transportToken) {
+        return '';
+      }
       return await exchangeTransportToken(transportToken);
     } catch (e) {
       if (!tokenErrorReportedRef.current) {

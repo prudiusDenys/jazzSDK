@@ -21,12 +21,10 @@ import {useJazzMeeting} from './src/jazz/useJazzMeeting';
 /**
  * Транспортный JWT для Jazz. Выпускается вашим бэкендом по ключу SDK
  * (см. README, «Авторизация по токену») — замените на запрос к нему.
+ * Пустая строка — вход гостем (см. README, «Вход гостем»).
  */
 async function getJazzTransportToken(): Promise<string> {
-  throw new Error(
-    'Не настроено получение транспортного токена: ' +
-      'реализуйте getJazzTransportToken() в App.tsx.',
-  );
+  return '';
 }
 
 /**

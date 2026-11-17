@@ -113,12 +113,10 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
         return emit(TOKEN_REQUESTED_EVENT, Arguments.createMap().apply { putString("requestId", requestId) })
     }
 
+    /** Ответ JS на `JazzTokenRequested`. Пустой токен — вход гостем. */
     @ReactMethod
     fun resolveTokenRequest(requestId: String, token: String) {
-        RNJazzTokenProvider.complete(
-            requestId,
-            if (token.isEmpty()) Result.failure(IllegalArgumentException("Пустой токен")) else Result.success(token),
-        )
+        RNJazzTokenProvider.complete(requestId, Result.success(token))
     }
 
     @ReactMethod

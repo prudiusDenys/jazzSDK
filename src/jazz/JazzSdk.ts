@@ -61,6 +61,9 @@ export type JazzInitOptions = {
    * (см. `exchangeTransportToken` / `createJazzTokenProvider` в jazzAuth.ts).
    * SDK вызывает её сам, когда ему нужен токен, в том числе повторно,
    * когда старый истёк, — поэтому это функция, а не строка.
+   *
+   * Пустая строка — вход гостем, без авторизации. Пустить гостя может только
+   * комната с разрешёнными гостями (`isGuestsOn`).
    */
   getToken: () => Promise<string>;
   /** Хост Jazz. По умолчанию https://salutejazz.ru */
