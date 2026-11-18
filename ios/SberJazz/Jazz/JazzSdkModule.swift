@@ -81,35 +81,30 @@ final class RNJazzTokenProvider: JazzConferenceTokenProvider, @unchecked Sendabl
   }
 }
 
-/// Participant name for Jazz. Without it (`userNameService: nil`) Jazz keeps
-/// the name typed on its own join screen and reuses it for every later
-/// meeting. `joinConference` / `startConference` store `options.userName`
-/// here before opening the meeting, and Jazz reads it through `userName()`.
-/// When the user renames themselves inside Jazz, the new name is kept until
-/// JS passes another one.
-final class RNJazzUserNameService: JazzUserNameService, @unchecked Sendable {
-  private let lock = NSLock()
-  private var name: String?
-
-  func userName() -> String? {
-    lock.lock()
-    defer { lock.unlock() }
-    return name
-  }
-
-  func userNameUpdated(newName: String) {
-    set(newName)
-  }
+/// Participant name for Jazz.
+///
+/// Jazz saves the name typed on its join screen to `UserDefaults` under
+/// `jazz_userName` (a JSON-encoded string) and, once a name is saved, shows
+/// it in a read-only field for every later meeting. Jazz re-reads that key
+/// each time the join screen opens, so writing it right before
+/// `joinConference` / `startConference` is enough to change the name.
+///
+/// `JazzSettings.userNameService` does not help here: Jazz asks it for the
+/// name only once, in `Jazz.initialize`, which can't be repeated.
+///
+/// The key is internal to the SDK (checked with JazzSDK 25.3.1020);
+/// re-check it after updating the SDK.
+enum JazzStoredUserName {
+  private static let key = "jazz_userName"
 
   /// Blank names are ignored so Jazz keeps the one it already has.
-  func set(_ newName: String?) {
+  static func set(_ name: String?) {
     guard
-      let trimmed = newName?.trimmingCharacters(in: .whitespacesAndNewlines),
-      !trimmed.isEmpty
+      let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !trimmed.isEmpty,
+      let data = try? JSONEncoder().encode(trimmed)
     else { return }
-    lock.lock()
-    name = trimmed
-    lock.unlock()
+    UserDefaults.standard.set(data, forKey: key)
   }
 }
 
@@ -132,10 +127,6 @@ final class JazzSdkModule: RCTEventEmitter {
   /// Jazz keeps the provider passed to the first `Jazz.initialize` for the
   /// whole process, so it must outlive any single module instance.
   private static let tokenProvider = RNJazzTokenProvider()
-
-  /// Same lifetime rule as `tokenProvider`: Jazz keeps the settings from the
-  /// first `Jazz.initialize`.
-  private static let userNameService = RNJazzUserNameService()
 
   /// The live module instance (replaced on every JS reload).
   static weak var current: JazzSdkModule?
@@ -199,7 +190,7 @@ final class JazzSdkModule: RCTEventEmitter {
       buttonsVisibility: .allVisible,
       inviteButton: nil,
       screenShareExtensionIdentifier: options["screenShareExtensionIdentifier"] as? String,
-      userNameService: Self.userNameService
+      userNameService: nil
     )
 
     do {
@@ -297,7 +288,7 @@ final class JazzSdkModule: RCTEventEmitter {
   ) {
     guard ensureInitialized(reject) else { return }
 
-    Self.userNameService.set(options["userName"] as? String)
+    JazzStoredUserName.set(options["userName"] as? String)
     JazzSession.shared.startConference(
       shouldSkipIntermidiateScreen: (options["skipIntermediateScreen"] as? Bool) ?? false,
       configuration: Self.conferenceConfiguration(from: options),
@@ -318,7 +309,7 @@ final class JazzSdkModule: RCTEventEmitter {
   ) {
     guard ensureInitialized(reject) else { return }
 
-    Self.userNameService.set(options["userName"] as? String)
+    JazzStoredUserName.set(options["userName"] as? String)
     let room = Self.room(from: options)
     let skipIntermediate = (options["skipIntermediateScreen"] as? Bool) ?? false
 
