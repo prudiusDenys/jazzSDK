@@ -148,9 +148,15 @@ npm run android:newarch  # новая: -PnewArchEnabled=true
 
 * **iOS** — разбирает ссылку через `Jazz.handleUrl` и вызывает
   `Jazz.joinConference` с кодом и паролем встречи;
-* **Android** — передаёт ссылку целиком: `Jazz.joinConference({meetingUrl})`
-  (Android SDK разбирает её сам; `psw` в ссылке — это не пароль в открытом
-  виде, поэтому вручную его не разобрать).
+* **Android** — передаёт ссылку целиком: `Jazz.joinConference({meetingUrl})`.
+  Ссылку на хост из `initialize` (по умолчанию `salutejazz.ru`) Android SDK
+  разбирает сам и показывает экран входа. Ссылку на другой хост — например,
+  корпоративный `jazz.sberbank.ru` — нативный модуль разбирает сам
+  (`JazzMeetingLink.kt`: код встречи и пароль из `psw`) и входит по коду на
+  хост из ссылки, как iOS с `roomHost`. Иначе Android SDK отказывает гостю
+  ещё до запроса к серверу («Only authorized Sber employees can join this
+  meeting»). При таком входе Jazz не показывает экран входа и подключает
+  сразу, с именем из `userName`.
 
 Дальше весь UI — экран входа (имя, микрофон, камера, кнопка Join), сама
 встреча, выход — рисует Jazz.
@@ -325,8 +331,9 @@ sub?.remove();
 * `createConference` создаёт встречу без UI (`scheduleConference`) и
   возвращает ссылку; `startConference` — `createConference` из Android SDK
   (создать и сразу войти).
-* `skipIntermediateScreen`, `roomHost`, `screenShareExtensionIdentifier`
-  на Android игнорируются.
+* `roomHost` при входе по `roomId` задаёт хост встречи (как на iOS).
+* `skipIntermediateScreen` и `screenShareExtensionIdentifier` на Android
+  игнорируются.
 
 ## Разрешения
 

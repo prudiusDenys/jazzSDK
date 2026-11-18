@@ -1,6 +1,7 @@
 package com.sberjazz.jazz
 
 import android.app.Application
+import android.net.Uri
 import android.util.Log
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -145,6 +146,7 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
                 promise.reject("E_JAZZ_INIT", "Не удалось инициализировать Jazz SDK: ${error.message}", error)
                 return@runOnUiThread
             }
+            configuredHostUrl = host
             hostUrl = host
             initialized = true
             promise.resolve(true)
@@ -160,6 +162,7 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun createConference(options: ReadableMap, promise: Promise) {
         runConference(promise, "E_JAZZ_CREATE") {
+            hostUrl = configuredHostUrl
             val userName = options.string("userName")?.trim().orEmpty()
             when (val result = client.scheduleConference(createArguments(options, userName))) {
                 is ConferenceResult.Success.Scheduled -> promise.resolve(result.conference.url)
@@ -173,6 +176,7 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startConference(options: ReadableMap, promise: Promise) {
         runConference(promise, "E_JAZZ_START") {
+            hostUrl = configuredHostUrl
             val userName = applyUserName(options)
             resolveConference(client.createConference(createArguments(options, userName)), promise, "E_JAZZ_START")
         }
@@ -180,19 +184,36 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
 
     /**
      * Вход во встречу: по ссылке-приглашению (`meetingUrl`) или по коду и
-     * паролю (`roomId` / `roomPassword`). Экран входа и встречу рисует Jazz.
+     * паролю (`roomId` / `roomPassword`, хост — `roomHost`). Встречу рисует Jazz.
+     *
+     * Ссылку на хост из `initialize` Jazz разбирает сам и показывает экран
+     * входа. Ссылку на другой хост (например, `jazz.sberbank.ru`) разбираем
+     * здесь и входим по коду на её хост — см. [JazzMeetingLink]. В этом случае
+     * Jazz входит сразу, без экрана входа.
      */
     @ReactMethod
     fun joinConference(options: ReadableMap, promise: Promise) {
-        val connection = options.string("meetingUrl")?.let { ConferenceConnectionArguments.Url(it) }
-            ?: options.string("roomId")?.let {
-                ConferenceConnectionArguments.RoomCode(roomCode = it, password = options.string("roomPassword") ?: "")
+        val meetingUrl = options.string("meetingUrl")
+        val link = meetingUrl?.let { JazzMeetingLink.parse(it) }
+        val (host, connection) = when {
+            meetingUrl != null && (link == null || sameHost(link.host, configuredHostUrl)) ->
+                configuredHostUrl to ConferenceConnectionArguments.Url(meetingUrl)
+            link != null ->
+                link.host to ConferenceConnectionArguments.RoomCode(roomCode = link.roomId, password = link.password)
+            else -> {
+                val roomId = options.string("roomId")
+                if (roomId == null) {
+                    promise.reject("E_JAZZ_JOIN", "На Android нужен meetingUrl или roomId")
+                    return
+                }
+                val roomHost = options.string("roomHost")?.trimEnd('/')
+                    ?.let { if (it.contains("://")) it else "https://$it" }
+                (roomHost ?: configuredHostUrl) to
+                    ConferenceConnectionArguments.RoomCode(roomCode = roomId, password = options.string("roomPassword") ?: "")
             }
-        if (connection == null) {
-            promise.reject("E_JAZZ_JOIN", "На Android нужен meetingUrl или roomId")
-            return
         }
         runConference(promise, "E_JAZZ_JOIN") {
+            hostUrl = host
             val arguments = JoinVideoCallArguments(
                 userName = applyUserName(options),
                 conferenceConnectionArguments = connection,
@@ -254,6 +275,9 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    private fun sameHost(a: String, b: String) =
+        Uri.parse(a).host.equals(Uri.parse(b).host, ignoreCase = true)
+
     /**
      * Имя участника из `options.userName`. Непустое имя записываем и в
      * пользователя по умолчанию: иначе Jazz подставит имя, введённое в прошлый
@@ -293,9 +317,17 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
         @Volatile
         internal var current: WeakReference<JazzSdkModule>? = null
 
-        /** Хост Jazz; читается SDK при каждом запросе. */
+        /**
+         * Хост Jazz для текущей встречи; читается SDK при каждом запросе.
+         * Обычно равен [configuredHostUrl], при входе по ссылке на другой
+         * хост — хосту из ссылки.
+         */
         @Volatile
         internal var hostUrl: String = DEFAULT_HOST_URL
+
+        /** Хост из `initialize({hostUrl})`. */
+        @Volatile
+        private var configuredHostUrl: String = DEFAULT_HOST_URL
 
         @Volatile
         private var installed = false
