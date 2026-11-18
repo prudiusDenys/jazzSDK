@@ -87,7 +87,10 @@ export type JazzMediaSettings = {
   /** 'receiver' — тихий динамик, 'speaker' — громкая связь. */
   preferredSpeaker?: 'receiver' | 'speaker';
   analyticsConferenceType?: string;
-  /** Android: имя участника во встрече (iOS берёт его из своего экрана входа). */
+  /**
+   * Имя участника во встрече. Если не передано (или пустое), Jazz подставит
+   * имя, введённое в прошлый раз на его экране входа.
+   */
   userName?: string;
 };
 

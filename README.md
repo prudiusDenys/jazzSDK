@@ -177,6 +177,7 @@ const {joinMeeting, busy} = useJazzMeeting({
 | Опция | По умолчанию | |
 | --- | --- | --- |
 | `getTransportToken` | — (обязательна) | транспортный JWT от вашего бэкенда; обмен на токен доступа хук делает сам. Вернула `''` — вход гостем (см. «Вход гостем») |
+| `userName` | — | имя участника во встрече. Не передано — Jazz подставит имя, введённое в прошлый раз на его экране входа |
 | `hostUrl` | `https://salutejazz.ru` | хост Jazz |
 | `onError(error, stage)` | `Alert` с текстом ошибки | `stage`: `'join'` — не удалось разобрать ссылку / открыть встречу, `'token'` — не получен токен |
 
@@ -324,7 +325,6 @@ sub?.remove();
 * `createConference` создаёт встречу без UI (`scheduleConference`) и
   возвращает ссылку; `startConference` — `createConference` из Android SDK
   (создать и сразу войти).
-* `userName` в опциях — имя участника (iOS берёт его со своего экрана входа).
 * `skipIntermediateScreen`, `roomHost`, `screenShareExtensionIdentifier`
   на Android игнорируются.
 

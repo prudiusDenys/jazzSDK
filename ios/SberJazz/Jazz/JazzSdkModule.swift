@@ -81,6 +81,38 @@ final class RNJazzTokenProvider: JazzConferenceTokenProvider, @unchecked Sendabl
   }
 }
 
+/// Participant name for Jazz. Without it (`userNameService: nil`) Jazz keeps
+/// the name typed on its own join screen and reuses it for every later
+/// meeting. `joinConference` / `startConference` store `options.userName`
+/// here before opening the meeting, and Jazz reads it through `userName()`.
+/// When the user renames themselves inside Jazz, the new name is kept until
+/// JS passes another one.
+final class RNJazzUserNameService: JazzUserNameService, @unchecked Sendable {
+  private let lock = NSLock()
+  private var name: String?
+
+  func userName() -> String? {
+    lock.lock()
+    defer { lock.unlock() }
+    return name
+  }
+
+  func userNameUpdated(newName: String) {
+    set(newName)
+  }
+
+  /// Blank names are ignored so Jazz keeps the one it already has.
+  func set(_ newName: String?) {
+    guard
+      let trimmed = newName?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !trimmed.isEmpty
+    else { return }
+    lock.lock()
+    name = trimmed
+    lock.unlock()
+  }
+}
+
 // MARK: - Module
 
 @objc(JazzSdk)
@@ -100,6 +132,10 @@ final class JazzSdkModule: RCTEventEmitter {
   /// Jazz keeps the provider passed to the first `Jazz.initialize` for the
   /// whole process, so it must outlive any single module instance.
   private static let tokenProvider = RNJazzTokenProvider()
+
+  /// Same lifetime rule as `tokenProvider`: Jazz keeps the settings from the
+  /// first `Jazz.initialize`.
+  private static let userNameService = RNJazzUserNameService()
 
   /// The live module instance (replaced on every JS reload).
   static weak var current: JazzSdkModule?
@@ -163,7 +199,7 @@ final class JazzSdkModule: RCTEventEmitter {
       buttonsVisibility: .allVisible,
       inviteButton: nil,
       screenShareExtensionIdentifier: options["screenShareExtensionIdentifier"] as? String,
-      userNameService: nil
+      userNameService: Self.userNameService
     )
 
     do {
@@ -261,6 +297,7 @@ final class JazzSdkModule: RCTEventEmitter {
   ) {
     guard ensureInitialized(reject) else { return }
 
+    Self.userNameService.set(options["userName"] as? String)
     JazzSession.shared.startConference(
       shouldSkipIntermidiateScreen: (options["skipIntermediateScreen"] as? Bool) ?? false,
       configuration: Self.conferenceConfiguration(from: options),
@@ -281,6 +318,7 @@ final class JazzSdkModule: RCTEventEmitter {
   ) {
     guard ensureInitialized(reject) else { return }
 
+    Self.userNameService.set(options["userName"] as? String)
     let room = Self.room(from: options)
     let skipIntermediate = (options["skipIntermediateScreen"] as? Bool) ?? false
 

@@ -24,6 +24,11 @@ export type UseJazzMeetingOptions = {
    * разрешёнными гостями (`isGuestsOn`).
    */
   getTransportToken: () => Promise<string>;
+  /**
+   * Имя участника во встрече. Если не передано, Jazz подставит имя,
+   * введённое в прошлый раз на его экране входа.
+   */
+  userName?: string;
   /** Хост Jazz. По умолчанию https://salutejazz.ru */
   hostUrl?: string;
   /** Обработка ошибок. По умолчанию — Alert с текстом ошибки. */
@@ -139,15 +144,17 @@ export function useJazzMeeting(
         ) {
           await Jazz.initialize({getToken, hostUrl});
         }
+        const userName = optionsRef.current.userName;
         if (Platform.OS === 'android') {
           // Android SDK принимает ссылку целиком и разбирает её сам.
-          await Jazz.joinConference({meetingUrl: meetingUrl.trim()});
+          await Jazz.joinConference({meetingUrl: meetingUrl.trim(), userName});
         } else {
           const room = await roomFromLink(meetingUrl);
           await Jazz.joinConference({
             roomId: room.id,
             roomPassword: room.password,
             roomHost: room.host ?? undefined,
+            userName,
           });
         }
       } catch (e) {

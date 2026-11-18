@@ -160,7 +160,8 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun createConference(options: ReadableMap, promise: Promise) {
         runConference(promise, "E_JAZZ_CREATE") {
-            when (val result = client.scheduleConference(createArguments(options))) {
+            val userName = options.string("userName")?.trim().orEmpty()
+            when (val result = client.scheduleConference(createArguments(options, userName))) {
                 is ConferenceResult.Success.Scheduled -> promise.resolve(result.conference.url)
                 is ConferenceResult.Error -> promise.reject("E_JAZZ_CREATE", result.describe())
                 else -> promise.resolve(null)
@@ -172,7 +173,8 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startConference(options: ReadableMap, promise: Promise) {
         runConference(promise, "E_JAZZ_START") {
-            resolveConference(client.createConference(createArguments(options)), promise, "E_JAZZ_START")
+            val userName = applyUserName(options)
+            resolveConference(client.createConference(createArguments(options, userName)), promise, "E_JAZZ_START")
         }
     }
 
@@ -192,7 +194,7 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
         }
         runConference(promise, "E_JAZZ_JOIN") {
             val arguments = JoinVideoCallArguments(
-                userName = options.string("userName") ?: "",
+                userName = applyUserName(options),
                 conferenceConnectionArguments = connection,
                 micEnabled = options.bool("isMicrophoneOn") ?: false,
                 cameraEnabled = options.bool("isCameraOn") ?: false,
@@ -252,10 +254,23 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    private fun createArguments(options: ReadableMap) = CreateVideoCallArguments(
+    /**
+     * Имя участника из `options.userName`. Непустое имя записываем и в
+     * пользователя по умолчанию: иначе Jazz подставит имя, введённое в прошлый
+     * раз на его экране входа. Пустое — оставляем имя, которое Jazz запомнил.
+     */
+    private suspend fun applyUserName(options: ReadableMap): String {
+        val userName = options.string("userName")?.trim().orEmpty()
+        if (userName.isNotEmpty()) {
+            jazzUserProvider.updateUserName(userName)
+        }
+        return userName
+    }
+
+    private fun createArguments(options: ReadableMap, userName: String) = CreateVideoCallArguments(
         roomType = options.string("type")?.uppercase() ?: "MEETING",
         roomName = options.string("title") ?: "Видеовстреча",
-        userName = options.string("userName") ?: "",
+        userName = userName,
         cameraEnabled = options.bool("isCameraOn") ?: false,
         micEnabled = options.bool("isMicrophoneOn") ?: false,
         withGuests = options.bool("isGuestsOn") ?: false,

@@ -128,7 +128,7 @@ function MeetingButton() {
 }
 ```
 
-Остальные опции хука (`hostUrl`, `onError`) — в README, раздел
+Остальные опции хука (`userName`, `hostUrl`, `onError`) — в README, раздел
 «Экран приложения».
 
 `getTransportToken` обязателен; если он вернул `''`, хук входит **гостем** —

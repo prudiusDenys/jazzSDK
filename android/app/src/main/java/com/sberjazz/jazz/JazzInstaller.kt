@@ -15,6 +15,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import ru.sberdevices.vc.platform.api.di.JazzPlatformDependencies
 import ru.sberdevices.vc.platform.api.domain.DomainUrlProvider
+import ru.sberdevices.vc.platform.api.domain.dependencies.DefaultUserProvider
 import ru.sberdevices.vc.platform.api.domain.JazzTokenProvider
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -29,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap
 internal fun installJazz(application: Application) {
     val dependencies = object : JazzPlatformDependencies by DefaultJazzSdkPlatformDependencies() {
         override val jazzTokenProvider: JazzTokenProvider = RNJazzTokenProvider
+        override val defaultUserProvider: DefaultUserProvider = jazzUserProvider
         override val domainUrlProvider: DomainUrlProvider = object : DomainUrlProvider {
             override fun getUrl(): String = JazzSdkModule.hostUrl
         }
@@ -41,6 +43,15 @@ internal fun installJazz(application: Application) {
         ),
     )
 }
+
+/**
+ * Пользователь (гость) по умолчанию — тот же, что в
+ * `DefaultJazzSdkPlatformDependencies`: живёт в памяти, вначале его имя —
+ * модель телефона. Jazz перезаписывает имя тем, что ввели на его экране
+ * входа, и подставляет во все следующие встречи. Держим ссылку на него, чтобы
+ * `joinConference({userName})` мог заменить имя перед входом.
+ */
+internal val jazzUserProvider: DefaultUserProvider = DefaultUserProvider.empty()
 
 /**
  * Провайдер токена доступа Jazz (ответ `POST /v1/auth/login`).
