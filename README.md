@@ -186,6 +186,8 @@ const {joinMeeting, busy} = useJazzMeeting({
 | `userName` | — | имя участника во встрече. Не передано — Jazz подставит имя, введённое в прошлый раз на его экране входа |
 | `hostUrl` | `https://salutejazz.ru` | хост Jazz |
 | `onError(error, stage)` | `Alert` с текстом ошибки | `stage`: `'join'` — не удалось разобрать ссылку / открыть встречу, `'token'` — не получен токен |
+| `onTranscription(event)` | — | только Android: фраза расшифровки речи `{id, text, timestamp, senderId, senderName}` (см. «Транскрибация») |
+| `onTranscriptionState(event)` | — | только Android: `{isOn, canView, canManage}` |
 
 Возвращает `joinMeeting(url)`, `busy` (идёт подключение — повторные нажатия
 игнорируются) и `isSupported` (`false`, если нативный модуль не слинкован).
@@ -337,6 +339,9 @@ sub?.remove();
 
 ### Транскрибация (только Android)
 
+Проще всего — через хук: `useJazzMeeting({..., onTranscription, onTranscriptionState})`
+подписывается сам, пока смонтирован компонент. Напрямую:
+
 ```ts
 // права и статус: {isOn, canView, canManage}
 const stateSub = Jazz.addTranscriptionStateListener(s => console.log(s));
@@ -352,9 +357,15 @@ textSub?.remove();
 
 На Android это `JazzIntegrationClient.asrController`: `state` →
 `JazzTranscriptionStateChanged`, `singleMessageFlow` → `JazzTranscription`.
-Права `canView` / `canManage` задаёт политика комнаты; вне встречи и в
-демо-комнате для гостя они `false`, а в меню Jazz нет пункта транскрибации.
-Текст фраз на реальной встрече с включённой транскрибацией пока не проверен.
+Проверено гостем на встрече `jazz.sberbank.ru`: организатор включил
+расшифровку — пришло `isOn: true` и фразы с именем говорящего.
+
+* Фразы приходят всем, пока расшифровка включена (`isOn`). `canView` на это
+  не влияет: гость получал фразы при `canView: false` — не фильтруйте по нему.
+* `canManage` нужен только для `enableTranscription` / `disableTranscription`.
+  Гостю его обычно не дают — включает организатор.
+* Кнопку транскрибации в меню Jazz включает флаг `isAsrControlsEnabled` в
+  `JazzInstaller.kt`; гостю без `canManage` её не видно (в меню её не было).
 
 На iOS `Jazz.isTranscriptionSupported === false`, подписки возвращают
 `undefined`, `enableTranscription` бросает ошибку: в iOS SDK текст ASR есть

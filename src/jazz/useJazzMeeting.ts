@@ -111,20 +111,13 @@ export function useJazzMeeting(
   // Транскрибация: подписываемся один раз при монтировании. SDK установлен
   // ещё в MainApplication.onCreate, поэтому initialize ждать не нужно.
   useEffect(() => {
-    console.log(
-      '[JazzASR] подписка на транскрибацию, поддерживается:',
-      Jazz.isTranscriptionSupported,
-    );
     const stateSub = Jazz.addTranscriptionStateListener(state => {
-      console.log('[JazzASR] state', state);
       optionsRef.current.onTranscriptionState?.(state);
     });
     const textSub = Jazz.addTranscriptionListener(message => {
-      console.log('[JazzASR] text', message.senderName, message.text);
       optionsRef.current.onTranscription?.(message);
     });
     return () => {
-      console.log('[JazzASR] отписка от транскрибации');
       stateSub?.remove();
       textSub?.remove();
     };

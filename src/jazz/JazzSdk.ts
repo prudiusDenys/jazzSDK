@@ -151,11 +151,17 @@ export type JazzTranscriptionEvent = {
 
 /** Состояние транскрибации во встрече. */
 export type JazzTranscriptionStateEvent = {
-  /** Транскрибация включена во встрече. */
+  /**
+   * Транскрибация включена во встрече. Пока true — приходят фразы
+   * (`addTranscriptionListener`), в том числе гостю.
+   */
   isOn: boolean;
-  /** Участнику разрешено видеть транскрибацию. */
+  /**
+   * Право видеть транскрибацию по данным Jazz. Не ориентир: на встрече
+   * jazz.sberbank.ru гость получал фразы при `canView: false`.
+   */
   canView: boolean;
-  /** Участнику разрешено включать и выключать транскрибацию. */
+  /** Право включать и выключать транскрибацию (`enableTranscription`). */
   canManage: boolean;
 };
 
@@ -312,17 +318,15 @@ export async function disableTranscription(): Promise<boolean> {
 
 /**
  * Подписка на фразы транскрибации. Приходят, пока транскрибация включена
- * во встрече (её может включить любой участник с правом `canManage`).
- * На iOS возвращает undefined.
+ * во встрече (`isOn`), — независимо от `canView`. Включает её организатор
+ * или участник с правом `canManage`. На iOS возвращает undefined.
  */
 export function addTranscriptionListener(
   listener: (event: JazzTranscriptionEvent) => void,
 ): EmitterSubscription | undefined {
   if (!isTranscriptionSupported || !NativeJazz) {
-    console.log('[JazzASR] addTranscriptionListener: не поддерживается');
     return undefined;
   }
-  console.log('[JazzASR] addTranscriptionListener');
   return emitter(NativeJazz).addListener('JazzTranscription', listener);
 }
 
@@ -331,10 +335,8 @@ export function addTranscriptionStateListener(
   listener: (event: JazzTranscriptionStateEvent) => void,
 ): EmitterSubscription | undefined {
   if (!isTranscriptionSupported || !NativeJazz) {
-    console.log('[JazzASR] addTranscriptionStateListener: не поддерживается');
     return undefined;
   }
-  console.log('[JazzASR] addTranscriptionStateListener');
   return emitter(NativeJazz).addListener(
     'JazzTranscriptionStateChanged',
     listener,

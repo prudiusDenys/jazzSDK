@@ -89,7 +89,6 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun addListener(eventName: String) {
-        Log.i(TAG, "addListener: $eventName (installed=$installed, installError=${installError?.message})")
         when (eventName) {
             PHASE_EVENT -> scope.launch { observeConferencePhase() }
             TRANSCRIPTION_EVENT -> scope.launch { observeTranscription() }
@@ -126,19 +125,14 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
      * Вызывается на main-потоке; повторный вызов ничего не делает.
      */
     private fun observeTranscription() {
-        if (transcriptionJob != null) {
-            Log.i(TAG, "ASR text: уже подписаны")
-            return
-        }
+        if (transcriptionJob != null) return
         if (installError != null || !installed) {
             Log.w(TAG, "ASR text: SDK не установлен (installed=$installed, installError=${installError?.message}) — подписка пропущена")
             return
         }
-        Log.i(TAG, "ASR text: начинаем собирать singleMessageFlow")
         transcriptionJob = scope.launch {
             try {
                 client.asrController.singleMessageFlow.collect { message ->
-                    Log.i(TAG, "ASR text: [${message.senderName}] ${message.message}")
                     emit(TRANSCRIPTION_EVENT, Arguments.createMap().apply {
                         putString("id", message.id)
                         putString("text", message.message)
@@ -160,22 +154,17 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
 
     /** Состояние транскрибации: включена ли и что разрешено во встрече. */
     private fun observeTranscriptionState() {
-        if (transcriptionStateJob != null) {
-            Log.i(TAG, "ASR state: уже подписаны")
-            return
-        }
+        if (transcriptionStateJob != null) return
         if (installError != null || !installed) {
             Log.w(TAG, "ASR state: SDK не установлен (installed=$installed, installError=${installError?.message}) — подписка пропущена")
             return
         }
-        Log.i(TAG, "ASR state: начинаем собирать asrController.state")
         transcriptionStateJob = scope.launch {
             try {
                 client.asrController.state
                     .map { Triple(it.status, it.canViewAsr, it.canManageAsr) }
                     .distinctUntilChanged()
                     .collect { (status, canView, canManage) ->
-                        Log.i(TAG, "ASR state: status=$status canView=$canView canManage=$canManage")
                         emit(TRANSCRIPTION_STATE_EVENT, Arguments.createMap().apply {
                             putBoolean("isOn", status == JazzAsrStatus.STARTED)
                             putBoolean("canView", canView)
@@ -318,7 +307,6 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun enableTranscription(promise: Promise) {
-        Log.i(TAG, "ASR: enableTranscription")
         runConference(promise, "E_JAZZ_ASR") {
             client.asrController.enableTranscription()
             promise.resolve(true)
@@ -327,7 +315,6 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun disableTranscription(promise: Promise) {
-        Log.i(TAG, "ASR: disableTranscription")
         runConference(promise, "E_JAZZ_ASR") {
             client.asrController.disableTranscription()
             promise.resolve(true)
