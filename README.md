@@ -335,6 +335,33 @@ sub?.remove();
 * `skipIntermediateScreen` и `screenShareExtensionIdentifier` на Android
   игнорируются.
 
+### Транскрибация (только Android)
+
+```ts
+// права и статус: {isOn, canView, canManage}
+const stateSub = Jazz.addTranscriptionStateListener(s => console.log(s));
+// фразы по мере распознавания: {id, text, timestamp, senderId, senderName}
+const textSub = Jazz.addTranscriptionListener(m => console.log(m.senderName, m.text));
+
+await Jazz.enableTranscription();  // нужно canManage
+await Jazz.disableTranscription();
+
+stateSub?.remove();
+textSub?.remove();
+```
+
+На Android это `JazzIntegrationClient.asrController`: `state` →
+`JazzTranscriptionStateChanged`, `singleMessageFlow` → `JazzTranscription`.
+Права `canView` / `canManage` задаёт политика комнаты; вне встречи и в
+демо-комнате для гостя они `false`, а в меню Jazz нет пункта транскрибации.
+Текст фраз на реальной встрече с включённой транскрибацией пока не проверен.
+
+На iOS `Jazz.isTranscriptionSupported === false`, подписки возвращают
+`undefined`, `enableTranscription` бросает ошибку: в iOS SDK текст ASR есть
+только в `JazzActiveConferenceState.messages` (`isAsr: true`), а этот объект
+отдаётся лишь в кастомный оверлей встречи (`customRepresentation`), который
+заменяет стандартную панель управления.
+
 ## Разрешения
 
 **Android:** ничего добавлять не нужно — камера, микрофон, Bluetooth,

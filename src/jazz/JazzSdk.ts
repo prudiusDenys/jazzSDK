@@ -30,6 +30,10 @@ type NativeJazzSdk = {
   joinConference(options: JazzJoinOptions): Promise<boolean>;
   terminateActiveConference(): Promise<boolean>;
   handleUrl(url: string, type: JazzLinkType): Promise<JazzLinkTarget>;
+  /** Только Android. */
+  enableTranscription?(): Promise<boolean>;
+  /** Только Android. */
+  disableTranscription?(): Promise<boolean>;
 };
 
 const NativeJazz: NativeJazzSdk | undefined = NativeModules.JazzSdk;
@@ -132,6 +136,28 @@ export type JazzConferencePhaseEvent =
   | {phase: 'waitingStream'}
   | {phase: 'activeStream'; streamId: string}
   | {phase: 'unknown'};
+
+/** Фраза транскрибации (ASR) — приходит по мере распознавания речи. */
+export type JazzTranscriptionEvent = {
+  id: string;
+  /** Распознанный текст. */
+  text: string;
+  /** Время фразы, мс с 1970-01-01 (как прислал Jazz). */
+  timestamp: number;
+  /** Кто говорил. */
+  senderId: string;
+  senderName: string;
+};
+
+/** Состояние транскрибации во встрече. */
+export type JazzTranscriptionStateEvent = {
+  /** Транскрибация включена во встрече. */
+  isOn: boolean;
+  /** Участнику разрешено видеть транскрибацию. */
+  canView: boolean;
+  /** Участнику разрешено включать и выключать транскрибацию. */
+  canManage: boolean;
+};
 
 // MARK: API
 
@@ -257,8 +283,63 @@ export function addConferencePhaseListener(
   );
 }
 
+/**
+ * Транскрибация (ASR) пробрасывается пока только на Android: в iOS SDK её
+ * текст доступен лишь внутри собственного UI встречи (кастомный оверлей).
+ */
+export const isTranscriptionSupported =
+  Platform.OS === 'android' && NativeJazz != null;
+
+function requireTranscription(): NativeJazzSdk {
+  const native = requireNative();
+  if (!isTranscriptionSupported) {
+    throw new Error('Транскрибация Jazz пока поддерживается только на Android');
+  }
+  return native;
+}
+
+/**
+ * Включает транскрибацию в текущей встрече. Нужно право `canManage`
+ * (см. `addTranscriptionStateListener`), иначе Jazz запрос проигнорирует.
+ */
+export async function enableTranscription(): Promise<boolean> {
+  return requireTranscription().enableTranscription!();
+}
+
+export async function disableTranscription(): Promise<boolean> {
+  return requireTranscription().disableTranscription!();
+}
+
+/**
+ * Подписка на фразы транскрибации. Приходят, пока транскрибация включена
+ * во встрече (её может включить любой участник с правом `canManage`).
+ * На iOS возвращает undefined.
+ */
+export function addTranscriptionListener(
+  listener: (event: JazzTranscriptionEvent) => void,
+): EmitterSubscription | undefined {
+  if (!isTranscriptionSupported || !NativeJazz) {
+    return undefined;
+  }
+  return emitter(NativeJazz).addListener('JazzTranscription', listener);
+}
+
+/** Подписка на состояние транскрибации. На iOS возвращает undefined. */
+export function addTranscriptionStateListener(
+  listener: (event: JazzTranscriptionStateEvent) => void,
+): EmitterSubscription | undefined {
+  if (!isTranscriptionSupported || !NativeJazz) {
+    return undefined;
+  }
+  return emitter(NativeJazz).addListener(
+    'JazzTranscriptionStateChanged',
+    listener,
+  );
+}
+
 export default {
   isJazzSupported,
+  isTranscriptionSupported,
   initialize,
   isInitialized,
   currentHostUrl,
@@ -268,4 +349,8 @@ export default {
   terminateActiveConference,
   handleUrl,
   addConferencePhaseListener,
+  enableTranscription,
+  disableTranscription,
+  addTranscriptionListener,
+  addTranscriptionStateListener,
 };

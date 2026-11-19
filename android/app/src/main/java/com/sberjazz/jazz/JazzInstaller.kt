@@ -16,6 +16,8 @@ import kotlinx.coroutines.withTimeout
 import ru.sberdevices.vc.platform.api.di.JazzPlatformDependencies
 import ru.sberdevices.vc.platform.api.domain.DomainUrlProvider
 import ru.sberdevices.vc.platform.api.domain.dependencies.DefaultUserProvider
+import ru.sberdevices.vc.platform.api.domain.dependencies.VideoCallsFeatureFlags
+import ru.sberdevices.vc.platform.api.domain.dependencies.VideoCallsFeatureFlagsDefaults
 import ru.sberdevices.vc.platform.api.domain.JazzTokenProvider
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -31,6 +33,12 @@ internal fun installJazz(application: Application) {
     val dependencies = object : JazzPlatformDependencies by DefaultJazzSdkPlatformDependencies() {
         override val jazzTokenProvider: JazzTokenProvider = RNJazzTokenProvider
         override val defaultUserProvider: DefaultUserProvider = jazzUserProvider
+
+        // По умолчанию в Android SDK кнопки транскрибации (ASR) выключены.
+        override val videoCallsFeatureFlags: VideoCallsFeatureFlags =
+            object : VideoCallsFeatureFlags by VideoCallsFeatureFlagsDefaults() {
+                override val isAsrControlsEnabled: Boolean = true
+            }
         override val domainUrlProvider: DomainUrlProvider = object : DomainUrlProvider {
             override fun getUrl(): String = JazzSdkModule.hostUrl
         }

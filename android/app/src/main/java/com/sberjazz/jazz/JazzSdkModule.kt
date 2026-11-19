@@ -13,6 +13,7 @@ import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.sdkit.jazz.client.integration.api.domain.JazzIntegrationClient
+import com.sdkit.jazz.client.integration.api.domain.controller.JazzAsrStatus
 import com.sdkit.jazz.client.integration.api.model.AudioDevice
 import com.sdkit.jazz.client.integration.api.model.ConferenceConnectionArguments
 import com.sdkit.jazz.client.integration.api.model.ConferenceResult
@@ -26,6 +27,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.lang.ref.WeakReference
 
@@ -58,6 +61,10 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
     /** Сборщик roomLifecycle; трогается только на main-потоке. */
     private var phaseJob: Job? = null
 
+    /** Сборщики транскрибации; трогаются только на main-потоке. */
+    private var transcriptionJob: Job? = null
+    private var transcriptionStateJob: Job? = null
+
     init {
         current = WeakReference(this)
     }
@@ -82,7 +89,11 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun addListener(eventName: String) {
-        if (eventName == PHASE_EVENT) scope.launch { observeConferencePhase() }
+        when (eventName) {
+            PHASE_EVENT -> scope.launch { observeConferencePhase() }
+            TRANSCRIPTION_EVENT -> scope.launch { observeTranscription() }
+            TRANSCRIPTION_STATE_EVENT -> scope.launch { observeTranscriptionState() }
+        }
     }
 
     @ReactMethod
@@ -103,6 +114,42 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
             client.roomLifecycle.collect { lifecycle ->
                 emit(PHASE_EVENT, Arguments.createMap().apply { putString("phase", lifecycle.toPhase()) })
             }
+        }
+    }
+
+    /**
+     * Новые фразы транскрибации (ASR) — по одной, по мере распознавания.
+     * Вызывается на main-потоке; повторный вызов ничего не делает.
+     */
+    private fun observeTranscription() {
+        if (transcriptionJob != null || installError != null || !installed) return
+        transcriptionJob = scope.launch {
+            client.asrController.singleMessageFlow.collect { message ->
+                emit(TRANSCRIPTION_EVENT, Arguments.createMap().apply {
+                    putString("id", message.id)
+                    putString("text", message.message)
+                    putDouble("timestamp", message.timestamp.toDouble())
+                    putString("senderId", message.senderId)
+                    putString("senderName", message.senderName)
+                })
+            }
+        }
+    }
+
+    /** Состояние транскрибации: включена ли и что разрешено во встрече. */
+    private fun observeTranscriptionState() {
+        if (transcriptionStateJob != null || installError != null || !installed) return
+        transcriptionStateJob = scope.launch {
+            client.asrController.state
+                .map { Triple(it.status, it.canViewAsr, it.canManageAsr) }
+                .distinctUntilChanged()
+                .collect { (status, canView, canManage) ->
+                    emit(TRANSCRIPTION_STATE_EVENT, Arguments.createMap().apply {
+                        putBoolean("isOn", status == JazzAsrStatus.STARTED)
+                        putBoolean("canView", canView)
+                        putBoolean("canManage", canManage)
+                    })
+                }
         }
     }
 
@@ -225,6 +272,26 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Включает транскрибацию во встрече. Нужно право `canManage` (см. событие
+     * `JazzTranscriptionStateChanged`); без него Jazz запрос проигнорирует.
+     */
+    @ReactMethod
+    fun enableTranscription(promise: Promise) {
+        runConference(promise, "E_JAZZ_ASR") {
+            client.asrController.enableTranscription()
+            promise.resolve(true)
+        }
+    }
+
+    @ReactMethod
+    fun disableTranscription(promise: Promise) {
+        runConference(promise, "E_JAZZ_ASR") {
+            client.asrController.disableTranscription()
+            promise.resolve(true)
+        }
+    }
+
     @ReactMethod
     fun terminateActiveConference(promise: Promise) {
         runConference(promise, "E_JAZZ_TERMINATE") {
@@ -310,6 +377,8 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
         const val NAME = "JazzSdk"
         private const val TAG = "JazzSdk"
         private const val PHASE_EVENT = "JazzConferencePhaseChanged"
+        private const val TRANSCRIPTION_EVENT = "JazzTranscription"
+        private const val TRANSCRIPTION_STATE_EVENT = "JazzTranscriptionStateChanged"
         private const val TOKEN_REQUESTED_EVENT = "JazzTokenRequested"
         const val DEFAULT_HOST_URL = "https://salutejazz.ru"
 
