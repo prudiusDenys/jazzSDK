@@ -1,10 +1,12 @@
-import {useCallback, useRef, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {Alert, Platform} from 'react-native';
 
 import Jazz, {
   DEFAULT_HOST_URL,
   isJazzSupported,
   type JazzRoom,
+  type JazzTranscriptionEvent,
+  type JazzTranscriptionStateEvent,
 } from './JazzSdk';
 import {exchangeTransportToken} from './jazzAuth';
 
@@ -33,6 +35,13 @@ export type UseJazzMeetingOptions = {
   hostUrl?: string;
   /** Обработка ошибок. По умолчанию — Alert с текстом ошибки. */
   onError?: (error: Error, stage: JazzMeetingErrorStage) => void;
+  /**
+   * Только Android. Фраза транскрибации (расшифровки речи) во встрече.
+   * Приходит, пока организатор держит расшифровку включённой.
+   */
+  onTranscription?: (event: JazzTranscriptionEvent) => void;
+  /** Только Android. Состояние транскрибации: включена ли, что разрешено. */
+  onTranscriptionState?: (event: JazzTranscriptionStateEvent) => void;
 };
 
 export type UseJazzMeetingResult = {
@@ -98,6 +107,28 @@ export function useJazzMeeting(
   // Android SDK запрашивает токен по нескольку раз за один вход — сообщаем
   // об ошибке токена один раз на нажатие, а не Alert на каждый запрос.
   const tokenErrorReportedRef = useRef(false);
+
+  // Транскрибация: подписываемся один раз при монтировании. SDK установлен
+  // ещё в MainApplication.onCreate, поэтому initialize ждать не нужно.
+  useEffect(() => {
+    console.log(
+      '[JazzASR] подписка на транскрибацию, поддерживается:',
+      Jazz.isTranscriptionSupported,
+    );
+    const stateSub = Jazz.addTranscriptionStateListener(state => {
+      console.log('[JazzASR] state', state);
+      optionsRef.current.onTranscriptionState?.(state);
+    });
+    const textSub = Jazz.addTranscriptionListener(message => {
+      console.log('[JazzASR] text', message.senderName, message.text);
+      optionsRef.current.onTranscription?.(message);
+    });
+    return () => {
+      console.log('[JazzASR] отписка от транскрибации');
+      stateSub?.remove();
+      textSub?.remove();
+    };
+  }, []);
 
   const reportError = useCallback(
     (e: unknown, stage: JazzMeetingErrorStage) => {

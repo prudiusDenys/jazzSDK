@@ -89,6 +89,7 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun addListener(eventName: String) {
+        Log.i(TAG, "addListener: $eventName (installed=$installed, installError=${installError?.message})")
         when (eventName) {
             PHASE_EVENT -> scope.launch { observeConferencePhase() }
             TRANSCRIPTION_EVENT -> scope.launch { observeTranscription() }
@@ -101,7 +102,10 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
 
     private fun emit(event: String, body: WritableMap): Boolean {
         val context = reactApplicationContext
-        if (!context.hasActiveReactInstance()) return false
+        if (!context.hasActiveReactInstance()) {
+            Log.w(TAG, "emit $event: нет активного React-инстанса, событие потеряно")
+            return false
+        }
         context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             .emit(event, body)
         return true
@@ -122,34 +126,70 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
      * Вызывается на main-потоке; повторный вызов ничего не делает.
      */
     private fun observeTranscription() {
-        if (transcriptionJob != null || installError != null || !installed) return
+        if (transcriptionJob != null) {
+            Log.i(TAG, "ASR text: уже подписаны")
+            return
+        }
+        if (installError != null || !installed) {
+            Log.w(TAG, "ASR text: SDK не установлен (installed=$installed, installError=${installError?.message}) — подписка пропущена")
+            return
+        }
+        Log.i(TAG, "ASR text: начинаем собирать singleMessageFlow")
         transcriptionJob = scope.launch {
-            client.asrController.singleMessageFlow.collect { message ->
-                emit(TRANSCRIPTION_EVENT, Arguments.createMap().apply {
-                    putString("id", message.id)
-                    putString("text", message.message)
-                    putDouble("timestamp", message.timestamp.toDouble())
-                    putString("senderId", message.senderId)
-                    putString("senderName", message.senderName)
-                })
+            try {
+                client.asrController.singleMessageFlow.collect { message ->
+                    Log.i(TAG, "ASR text: [${message.senderName}] ${message.message}")
+                    emit(TRANSCRIPTION_EVENT, Arguments.createMap().apply {
+                        putString("id", message.id)
+                        putString("text", message.message)
+                        putDouble("timestamp", message.timestamp.toDouble())
+                        putString("senderId", message.senderId)
+                        putString("senderName", message.senderName)
+                    })
+                }
+                Log.w(TAG, "ASR text: singleMessageFlow завершился")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "ASR text: ошибка в singleMessageFlow", e)
+            } finally {
+                transcriptionJob = null
             }
         }
     }
 
     /** Состояние транскрибации: включена ли и что разрешено во встрече. */
     private fun observeTranscriptionState() {
-        if (transcriptionStateJob != null || installError != null || !installed) return
+        if (transcriptionStateJob != null) {
+            Log.i(TAG, "ASR state: уже подписаны")
+            return
+        }
+        if (installError != null || !installed) {
+            Log.w(TAG, "ASR state: SDK не установлен (installed=$installed, installError=${installError?.message}) — подписка пропущена")
+            return
+        }
+        Log.i(TAG, "ASR state: начинаем собирать asrController.state")
         transcriptionStateJob = scope.launch {
-            client.asrController.state
-                .map { Triple(it.status, it.canViewAsr, it.canManageAsr) }
-                .distinctUntilChanged()
-                .collect { (status, canView, canManage) ->
-                    emit(TRANSCRIPTION_STATE_EVENT, Arguments.createMap().apply {
-                        putBoolean("isOn", status == JazzAsrStatus.STARTED)
-                        putBoolean("canView", canView)
-                        putBoolean("canManage", canManage)
-                    })
-                }
+            try {
+                client.asrController.state
+                    .map { Triple(it.status, it.canViewAsr, it.canManageAsr) }
+                    .distinctUntilChanged()
+                    .collect { (status, canView, canManage) ->
+                        Log.i(TAG, "ASR state: status=$status canView=$canView canManage=$canManage")
+                        emit(TRANSCRIPTION_STATE_EVENT, Arguments.createMap().apply {
+                            putBoolean("isOn", status == JazzAsrStatus.STARTED)
+                            putBoolean("canView", canView)
+                            putBoolean("canManage", canManage)
+                        })
+                    }
+                Log.w(TAG, "ASR state: поток состояния завершился")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "ASR state: ошибка в потоке состояния", e)
+            } finally {
+                transcriptionStateJob = null
+            }
         }
     }
 
@@ -278,6 +318,7 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun enableTranscription(promise: Promise) {
+        Log.i(TAG, "ASR: enableTranscription")
         runConference(promise, "E_JAZZ_ASR") {
             client.asrController.enableTranscription()
             promise.resolve(true)
@@ -286,6 +327,7 @@ class JazzSdkModule(reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun disableTranscription(promise: Promise) {
+        Log.i(TAG, "ASR: disableTranscription")
         runConference(promise, "E_JAZZ_ASR") {
             client.asrController.disableTranscription()
             promise.resolve(true)

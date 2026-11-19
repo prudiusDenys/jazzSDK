@@ -319,8 +319,10 @@ export function addTranscriptionListener(
   listener: (event: JazzTranscriptionEvent) => void,
 ): EmitterSubscription | undefined {
   if (!isTranscriptionSupported || !NativeJazz) {
+    console.log('[JazzASR] addTranscriptionListener: не поддерживается');
     return undefined;
   }
+  console.log('[JazzASR] addTranscriptionListener');
   return emitter(NativeJazz).addListener('JazzTranscription', listener);
 }
 
@@ -329,8 +331,10 @@ export function addTranscriptionStateListener(
   listener: (event: JazzTranscriptionStateEvent) => void,
 ): EmitterSubscription | undefined {
   if (!isTranscriptionSupported || !NativeJazz) {
+    console.log('[JazzASR] addTranscriptionStateListener: не поддерживается');
     return undefined;
   }
+  console.log('[JazzASR] addTranscriptionStateListener');
   return emitter(NativeJazz).addListener(
     'JazzTranscriptionStateChanged',
     listener,
